@@ -9,6 +9,7 @@ export {
   setCaptureDatabase,
   createCapture,
   listCaptures,
-  deleteCapture,
+  queryCaptures,
+  deleteCaptures,
 } from './dao/captureDao';
 export type { CaptureRecord } from '@shiguang/shared';

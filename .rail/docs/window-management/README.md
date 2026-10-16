@@ -9,5 +9,5 @@
 
 ## 技术债务
 
-- [ ] IPC 注册分散：`pet:clicked` 在 petWindow.ts、`input:blur`/`input:close` 在 inputWindow.ts 内注册，未汇入 `registerIpc` 汇总点（结构偏差；未来新增 handler 时顺手治理）
+- [x] IPC 注册分散：`pet:clicked` 在 petWindow.ts、`input:blur`/`input:close` 在 inputWindow.ts 内注册，未汇入 `registerIpc` 汇总点（结构偏差；未来新增 handler 时顺手治理）——M2 已收敛：`registerPetWindowIpc`/`registerInputWindowIpc` 汇入 `registerIpc`，capture/console handler 同点注册
 - [ ] `input:close` 不记 blur 抑制，与 design 字面有偏差（行为合理留档：反馈完成后主动收起无需防点击穿透；`input:blur` 才走抑制路径）

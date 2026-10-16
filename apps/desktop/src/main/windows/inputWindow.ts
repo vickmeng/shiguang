@@ -97,6 +97,20 @@ onPetClicked(() => {
 });
 
 /**
+ * 注册输入框窗口的渲染端 IPC 收起通道（input:blur / input:close）。
+ * 由 registerIpc 统一装配，createInputWindow 不再出现 ipcMain。
+ */
+export function registerInputWindowIpc(): void {
+  // 渲染端 textarea blur 兜底（与原生 blur 事件同路径，带抑制）
+  ipcMain.removeAllListeners(IPC.inputBlur);
+  ipcMain.on(IPC.inputBlur, hideWithSuppress);
+
+  // 渲染端反馈完成后主动收起（如「✓ 已拾光」结束）：直接收起，不做抑制
+  ipcMain.removeAllListeners(IPC.inputClose);
+  ipcMain.on(IPC.inputClose, hide);
+}
+
+/**
  * 创建输入框窗口（初始隐藏），并接线 blur / input:blur / input:close 收起路径。
  * 重复调用返回既有实例（幂等）。
  */
@@ -128,14 +142,6 @@ export function createInputWindow(): BrowserWindow {
 
   // 失焦即收起并进入抑制窗口（AC-3 blur 路径）
   inputWindow.on('blur', hideWithSuppress);
-
-  // 渲染端 textarea blur 兜底（与原生 blur 事件同路径，带抑制）
-  ipcMain.removeAllListeners(IPC.inputBlur);
-  ipcMain.on(IPC.inputBlur, hideWithSuppress);
-
-  // 渲染端反馈完成后主动收起（如「✓ 已拾光」结束）：直接收起，不做抑制
-  ipcMain.removeAllListeners(IPC.inputClose);
-  ipcMain.on(IPC.inputClose, hide);
 
   // 开发态走 vite dev server；打包态加载 out/renderer/input/input.html
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'];

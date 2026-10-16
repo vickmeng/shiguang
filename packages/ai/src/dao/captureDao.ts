@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3';
-import type { CaptureRecord } from '@shiguang/shared';
+import type {
+  CaptureRecord,
+  QueryCapturesPayload,
+  QueryCapturesResult,
+} from '@shiguang/shared';
 
 /**
  * captureDao 持有的数据库连接。
@@ -80,14 +84,73 @@ export function listCaptures(limit?: number): CaptureRecord[] {
 }
 
 /**
- * 删除一条捕获记录（纯删记录，M1 无附件无需级联/磁盘清理）。
+ * 分页筛选查询捕获记录，返回当页数据与同条件全量条数。
  *
- * @param id 记录 id；不存在时不抛错
+ * 排序固定 created_at DESC, id DESC（同毫秒并发写入时以自增 id 兜底保证顺序确定）；
+ * keyword 走参数化 LIKE 包含匹配，since 走 created_at >= ?，until 走 created_at <= ?
+ *（含该秒），三者可任意组合（created_at 为 ISO 字符串，字典序即时间序），均按是否
+ * 传入动态拼接 WHERE。total 与 items 共用同一组条件，
+ * 保证分页页数计算与当页数据一致。
+ *
+ * @param input 分页筛选载荷（page 从 1 起算）
+ * @returns { items: 当页记录, total: 同筛选条件下全部条数 }
  */
-export function deleteCapture(id: number): void {
+export function queryCaptures(
+  input: QueryCapturesPayload,
+): QueryCapturesResult {
   if (!db) {
     throw new Error('capture database not initialized: call setCaptureDatabase first');
   }
 
-  db.prepare(`DELETE FROM records WHERE id = ?`).run(id);
+  const conditions: string[] = [];
+  // 查询条件参数为 string（keyword/since），后续展开到 better-sqlite3 的
+  // get/all 时与 number 类型的分页参数（pageSize/offset）混用，故声明为联合类型
+  const params: Array<string | number> = [];
+  if (input.keyword !== undefined) {
+    conditions.push(`text LIKE '%' || ? || '%'`);
+    params.push(input.keyword);
+  }
+  if (input.since !== undefined) {
+    conditions.push(`created_at >= ?`);
+    params.push(input.since);
+  }
+  if (input.until !== undefined) {
+    conditions.push(`created_at <= ?`);
+    params.push(input.until);
+  }
+  const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM records${where}`)
+      .get(...params) as { count: number }
+  ).count;
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM records${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, input.pageSize, (input.page - 1) * input.pageSize) as unknown as RecordRow[];
+
+  return { items: rows.map(toRecord), total };
+}
+
+/**
+ * 单事务批量删除捕获记录（纯删记录，M1 无附件无需级联/磁盘清理）。
+ *
+ * @param ids 待删除的记录 id 集合；不存在的 id 静默跳过，空数组时不执行删除、不抛错
+ */
+export function deleteCaptures(ids: number[]): void {
+  const database = db;
+  if (!database) {
+    throw new Error('capture database not initialized: call setCaptureDatabase first');
+  }
+  if (ids.length === 0) {
+    return;
+  }
+
+  const placeholders = ids.map(() => '?').join(', ');
+  database.transaction(() => {
+    database.prepare(`DELETE FROM records WHERE id IN (${placeholders})`).run(...ids);
+  })();
 }

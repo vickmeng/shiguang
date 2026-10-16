@@ -14,6 +14,11 @@ function createApiMock() {
         sourceApp: null,
         createdAt: new Date().toISOString(),
       }),
+      list: vi.fn(),
+      delete: vi.fn(),
+    },
+    console: {
+      open: vi.fn(),
     },
     input: {
       blur: vi.fn(),

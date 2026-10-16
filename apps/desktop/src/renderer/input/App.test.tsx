@@ -9,6 +9,11 @@ function createApiMock(): ShiguangApi {
   return {
     capture: {
       create: vi.fn(),
+      list: vi.fn(),
+      delete: vi.fn(),
+    },
+    console: {
+      open: vi.fn(),
     },
     input: {
       blur: vi.fn(),
@@ -36,5 +41,16 @@ describe('App 输入框窗口', () => {
     await user.click(screen.getByRole('button', { name: '关闭' }));
 
     expect(api.input.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('点击「打开后台」按钮调用 console.open()', async () => {
+    const user = userEvent.setup();
+    const api = createApiMock();
+    window.api = api;
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '打开后台' }));
+
+    expect(api.console.open).toHaveBeenCalledTimes(1);
   });
 });

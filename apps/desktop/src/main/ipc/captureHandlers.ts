@@ -5,13 +5,23 @@
  * （见 main/index.ts），本模块直接使用 captureDao，不再关心连接来源。
  */
 import { ipcMain } from 'electron';
-import { createCapture } from '@shiguang/ai';
+import { createCapture, queryCaptures, deleteCaptures } from '@shiguang/ai';
 import { IPC } from '@shiguang/shared';
-import type { CreateCapturePayload } from '@shiguang/shared';
+import type {
+  CreateCapturePayload,
+  QueryCapturesPayload,
+  DeleteCapturesPayload,
+} from '@shiguang/shared';
 
-/** 注册 `capture:create` 通道：写入一条纯文字捕获记录并返回入库结果。 */
+/** 注册捕获相关 IPC 通道：写入、分页查询、批量删除。 */
 export function registerCaptureHandlers(): void {
   ipcMain.handle(IPC.captureCreate, (_event, payload: CreateCapturePayload) =>
     createCapture({ text: payload.text, sourceApp: null }),
+  );
+  ipcMain.handle(IPC.captureList, (_event, payload: QueryCapturesPayload) =>
+    queryCaptures(payload),
+  );
+  ipcMain.handle(IPC.captureDelete, (_event, payload: DeleteCapturesPayload) =>
+    deleteCaptures(payload.ids),
   );
 }

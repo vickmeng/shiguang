@@ -31,10 +31,11 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     build: {
       rollupOptions: {
-        // M1 双页面：宠物窗口 + 输入框窗口
+        // M1 双页面：宠物窗口 + 输入框窗口；M2 追加后台（console）窗口
         input: {
           pet: resolve(__dirname, 'src/renderer/pet/pet.html'),
           input: resolve(__dirname, 'src/renderer/input/input.html'),
+          console: resolve(__dirname, 'src/renderer/console/console.html'),
         },
       },
     },

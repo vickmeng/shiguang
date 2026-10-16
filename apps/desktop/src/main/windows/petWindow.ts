@@ -39,6 +39,17 @@ export function onPetClicked(cb: () => void): () => void {
 }
 
 /**
+ * 注册 `pet:clicked` 的 IPC 监听器：渲染端点击（未拖动）上报后转发给
+ * 注册的协调回调。由 registerIpc 统一装配，createPetWindow 不再触碰 ipcMain。
+ */
+export function registerPetWindowIpc(): void {
+  ipcMain.removeAllListeners(IPC.petClicked);
+  ipcMain.on(IPC.petClicked, () => {
+    for (const cb of petClickedListeners) cb();
+  });
+}
+
+/**
  * 获取宠物窗口实例（inputWindow 定位输入框时读取宠物边界用）。
  */
 export function getPetWindow(): BrowserWindow | null {
@@ -80,12 +91,6 @@ export function createPetWindow(): BrowserWindow {
   // 用户关掉宠物窗口（如 Cmd+W 兜底）时清空引用，允许下次重建
   petWindow.on('closed', () => {
     petWindow = null;
-  });
-
-  // 渲染端点击（未拖动）上报 pet:clicked → 转发给注册的协调回调
-  ipcMain.removeAllListeners(IPC.petClicked);
-  ipcMain.on(IPC.petClicked, () => {
-    for (const cb of petClickedListeners) cb();
   });
 
   // 开发态走 vite dev server；打包态加载 out/renderer/pet/pet.html
