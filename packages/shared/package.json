@@ -1,0 +1,17 @@
+{
+  "name": "@shiguang/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "拾光共享层：TS 类型、IPC 契约、常量",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

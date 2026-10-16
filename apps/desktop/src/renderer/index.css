@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn 风格主题变量（hsl 分量格式，配合 primitives 中 hsl(var(--token)) 使用） */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --primary: 222.2 47.4% 11.2%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 222.2 84% 4.9%;
+  --radius: 0.5rem;
+}
+
+/* 宠物/输入框均为透明背景浮动窗口：html/body 不设背景色，避免白底泄漏 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  /* 默认禁止文本选择，输入场景由各输入组件自行放开 */
+  user-select: none;
+}

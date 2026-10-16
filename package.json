@@ -1,0 +1,14 @@
+{
+  "name": "shiguang",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @shiguang/desktop dev",
+    "typecheck": "pnpm -r typecheck",
+    "pack:mac": "pnpm --filter @shiguang/desktop run pack:mac"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,11 @@
+appId: com.shiguang.desktop
+productName: 拾光
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+asar: false
+mac:
+  category: public.app-category.utilities
+  target: dir
