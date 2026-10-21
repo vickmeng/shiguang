@@ -12,6 +12,7 @@ function makeRecords(total: number) {
     text: `记录 ${i + 1}`,
     sourceApp: null,
     createdAt: '2024-05-01T08:30:00.000Z',
+    imagePaths: [] as string[],
   }));
 }
 
@@ -37,6 +38,7 @@ function createApiMock(total: number): ShiguangApi {
         });
       }),
       delete: vi.fn(() => Promise.resolve()),
+      copyImage: vi.fn(),
     },
     console: {
       open: vi.fn(),
@@ -576,6 +578,253 @@ describe('RecordsPage 记录页', () => {
     expect(
       (screen.getByRole('button', { name: '全部' }) as HTMLButtonElement).getAttribute('aria-pressed')
     ).toBe('true');
+  });
+
+  describe('类型筛选 segmented（任务 21）', () => {
+    it('默认高亮「全部」且首屏查询不带 hasImages 字段', async () => {
+      const api = createApiMock(1);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
+      expect(
+        (screen.getByRole('button', { name: '类型：全部' }) as HTMLButtonElement).getAttribute('aria-pressed')
+      ).toBe('true');
+    });
+
+    it('点「图片」触发带 hasImages:true 的查询，「文字」带 hasImages:false', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(1);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
+      expect(
+        (screen.getByRole('button', { name: '类型：图片' }) as HTMLButtonElement).getAttribute('aria-pressed')
+      ).toBe('true');
+
+      await user.click(screen.getByRole('button', { name: '类型：文字' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: false });
+    });
+
+    it('切回「全部」后 payload 不再带 hasImages 字段', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(1);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+      await user.click(screen.getByRole('button', { name: '类型：全部' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
+    });
+
+    it('切换类型从当前页重置回第 1 页重新查询', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '下一页' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 2, pageSize: 20 });
+
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
+    });
+
+    it('类型与关键词组合时 payload 同时携带两者', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.type(screen.getByRole('searchbox'), '拾光');
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({
+        page: 1,
+        pageSize: 20,
+        keyword: '拾光',
+        hasImages: true,
+      });
+    });
+
+    it('仅类型筛选生效且有筛选但无结果时显示调整筛选引导文案', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(0);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findByText('还没有任何记录');
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+      expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
+      expect(screen.queryByText('还没有任何记录')).toBeNull();
+    });
+  });
+
+  describe('删除确认文案（任务 22）', () => {
+    /** 混合类型记录：1 无图（纯文字）、2 含图（imagePaths 非空） */
+    const mixedRecords = [
+      { id: 1, text: '文字记录 1', sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[] },
+      { id: 2, text: '', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'] },
+    ];
+
+    function createMixedApiMock(): ShiguangApi {
+      return {
+        capture: {
+          create: vi.fn(),
+          list: vi.fn(() => Promise.resolve({ items: mixedRecords, total: mixedRecords.length })),
+          delete: vi.fn(() => Promise.resolve()),
+          copyImage: vi.fn(),
+        },
+        console: { open: vi.fn() },
+        input: { blur: vi.fn(), close: vi.fn() },
+        pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
+      };
+    }
+
+    it('对 image 行点删除，确认框 description 含「将同时删除图片文件」', async () => {
+      const user = userEvent.setup();
+      const api = createMixedApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '删除记录 2' }));
+
+      expect(screen.getByText('删除后不可恢复。将同时删除图片文件。')).toBeTruthy();
+    });
+
+    it('对 text 行点删除，确认框维持原文案不含扩展文案', async () => {
+      const user = userEvent.setup();
+      const api = createMixedApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '删除记录 1' }));
+
+      expect(screen.getByText('删除后不可恢复。')).toBeTruthy();
+      expect(screen.queryByText(/将同时删除/)).toBeNull();
+    });
+
+    it('批量勾选混合集（含图片）时确认框含「将同时删除已选记录的图片文件」', async () => {
+      const user = userEvent.setup();
+      const api = createMixedApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('checkbox', { name: '选择记录 1' }));
+      await user.click(screen.getByRole('checkbox', { name: '选择记录 2' }));
+      await user.click(screen.getByRole('button', { name: '批量删除' }));
+
+      expect(screen.getByText('删除后不可恢复。将同时删除已选记录的图片文件。')).toBeTruthy();
+    });
+
+    it('批量勾选纯文字集时确认框维持原文案', async () => {
+      const user = userEvent.setup();
+      const api = createMixedApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('checkbox', { name: '选择记录 1' }));
+      await user.click(screen.getByRole('button', { name: '批量删除' }));
+
+      expect(screen.getByText('删除后不可恢复。')).toBeTruthy();
+      expect(screen.queryByText(/将同时删除/)).toBeNull();
+    });
+  });
+
+  describe('图片记录混合渲染（任务 23）', () => {
+    /** 混合记录：1/3 纯文字，2/4 含图（imagePaths 非空） */
+    const mixedRecords = [
+      { id: 1, text: '文字记录 1', sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[] },
+      { id: 2, text: '', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'] },
+      { id: 3, text: '文字记录 3', sourceApp: null, createdAt: '2024-05-03T10:00:00.000Z', imagePaths: [] as string[] },
+      { id: 4, text: '', sourceApp: 'screenshot', createdAt: '2024-05-04T11:00:00.000Z', imagePaths: ['images/b.png'] },
+    ];
+
+    /**
+     * mock capture.list 在 mock 层按 payload.hasImages 过滤（与后端 queryCaptures 行为一致），
+     * 模拟真实链路「payload.hasImages → 服务端筛选 → 仅返回对应类型记录」的集成语义。
+     */
+    function createMixedListApiMock(): ShiguangApi {
+      return {
+        capture: {
+          create: vi.fn(),
+          list: vi.fn((payload: QueryCapturesPayload) => {
+            const items = payload.hasImages === true
+              ? mixedRecords.filter((r) => r.imagePaths.length > 0)
+              : payload.hasImages === false
+                ? mixedRecords.filter((r) => r.imagePaths.length === 0)
+                : mixedRecords;
+            return Promise.resolve({ items, total: items.length });
+          }),
+          delete: vi.fn(() => Promise.resolve()),
+          copyImage: vi.fn(),
+        },
+        console: { open: vi.fn() },
+        input: { blur: vi.fn(), close: vi.fn() },
+        pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
+      };
+    }
+
+    it('image 行与 text 行同屏渲染：文字预览与 shiguang-image:// 缩略图并存', async () => {
+      const api = createMixedListApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      // text 行渲染文字预览
+      expect(await screen.findByText('文字记录 1')).toBeTruthy();
+      expect(screen.getByText('文字记录 3')).toBeTruthy();
+      // image 行渲染协议缩略图（collapsed 态无大图）
+      expect(screen.getByAltText('截图记录 2')).toBeTruthy();
+      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
+      expect((screen.getByAltText('截图记录 2') as HTMLImageElement).src).toBe('shiguang-image://a.png');
+      expect(screen.queryByAltText('截图记录 2 大图')).toBeNull();
+      expect(api.capture.list).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
+    });
+
+    it('类型筛选切「图片」后列表仅渲染图片行，payload 带 hasImages:true', async () => {
+      const user = userEvent.setup();
+      const api = createMixedListApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findByText('文字记录 1');
+      await user.click(screen.getByRole('button', { name: '类型：图片' }));
+
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
+      // 仅图片行：缩略图保留、文字行消失
+      await waitFor(() => expect(screen.queryByText('文字记录 1')).toBeNull());
+      expect(screen.getByAltText('截图记录 2')).toBeTruthy();
+      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
+      expect(screen.getAllByRole('checkbox')).toHaveLength(2);
+    });
+
+    it('「图片丢失」占位在 img error 后出现，替代缩略图', async () => {
+      const api = createMixedListApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      const img = await screen.findByAltText('截图记录 2');
+      expect(screen.queryByText('图片丢失')).toBeNull();
+
+      // jsdom 不加载 shiguang-image:// 资源、不自发 error，手动派发 error 事件
+      fireEvent.error(img);
+
+      expect(screen.getByText('图片丢失')).toBeTruthy();
+      expect(screen.queryByAltText('截图记录 2')).toBeNull();
+      // 其他行不受影响
+      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
+      expect(screen.getByText('文字记录 1')).toBeTruthy();
+    });
   });
 
   it('有筛选条件但无结果时显示调整筛选引导文案', async () => {

@@ -15,6 +15,7 @@ import { createPetWindow } from './windows/petWindow';
 import { createInputWindow } from './windows/inputWindow';
 import { createTray } from './tray';
 import { registerIpc } from './ipc/registerIpc';
+import { registerImageProtocol } from './screenshot/imageProtocol';
 
 // 1. 加载环境变量（仓库根 .env；KIMI_API_KEY 为分析阶段占位）
 // dotenv 默认取 process.cwd() 下的 .env，而 pnpm --filter 启动时 cwd 是 apps/desktop，
@@ -40,9 +41,11 @@ const dbPath = path.join(app.getPath('userData'), 'shiguang.db');
 setCaptureDatabase(initDatabase(dbPath));
 
 // 3. app ready 后装配 M1 窗口：
-// 宠物 → 托盘 → IPC → 输入框（隐藏态，由 pet:clicked 显隐协调唤出）。
+// 图片协议（须早于窗口创建，渲染端 <img> 才能走 shiguang-image://）
+// → 宠物 → 托盘 → IPC → 输入框（隐藏态，由 pet:clicked 显隐协调唤出）。
 // 调试期暂不隐藏 Dock 图标，便于聚焦应用排查问题；稳定后恢复 app.dock?.hide()。
 app.whenReady().then(() => {
+  registerImageProtocol();
   createPetWindow();
   createTray();
   registerIpc();

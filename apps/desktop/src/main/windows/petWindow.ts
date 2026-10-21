@@ -39,8 +39,9 @@ export function onPetClicked(cb: () => void): () => void {
 }
 
 /**
- * 注册 `pet:clicked` 的 IPC 监听器：渲染端点击（未拖动）上报后转发给
- * 注册的协调回调。由 registerIpc 统一装配，createPetWindow 不再触碰 ipcMain。
+ * 注册 `pet:clicked` 的 IPC 监听器：渲染端点击（未拖动）
+ * 上报后转发给注册的协调回调。由 registerIpc 统一装配，createPetWindow
+ * 不再触碰 ipcMain。
  */
 export function registerPetWindowIpc(): void {
   ipcMain.removeAllListeners(IPC.petClicked);

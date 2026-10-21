@@ -8,6 +8,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   IPC,
   type CaptureRecord,
+  type CopyImagePayload,
   type CreateCapturePayload,
   type DeleteCapturesPayload,
   type QueryCapturesPayload,
@@ -23,6 +24,8 @@ export interface ShiguangApi {
     list(payload: QueryCapturesPayload): Promise<QueryCapturesResult>;
     /** 批量删除捕获记录 */
     delete(payload: DeleteCapturesPayload): Promise<void>;
+    /** 将图片记录复制到系统剪贴板（非图片记录或文件缺失时 reject） */
+    copyImage(payload: CopyImagePayload): Promise<void>;
   };
   console: {
     /** 打开（或聚焦）后台管理窗口 */
@@ -50,6 +53,7 @@ const api: ShiguangApi = {
     create: (payload) => ipcRenderer.invoke(IPC.captureCreate, payload),
     list: (payload) => ipcRenderer.invoke(IPC.captureList, payload),
     delete: (payload) => ipcRenderer.invoke(IPC.captureDelete, payload),
+    copyImage: (payload) => ipcRenderer.invoke(IPC.captureCopyImage, payload),
   },
   console: {
     open: () => ipcRenderer.send(IPC.consoleOpen),

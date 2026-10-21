@@ -6,7 +6,8 @@
  *   → createStateMachine(ANIMATIONS, { fallback: 'idle' }) → 初始 play('idle')
  *   → onChange 驱动 createAnimatedSprite 切换 → window.api.pet.onSetState 接预留口子。
  *
- * 唤出输入框：监听容器 contextmenu（右键）调 window.api.pet.clicked()。
+ * 唤出输入框：监听容器 contextmenu（右键）调 window.api.pet.clicked()，
+ * 与左键单击同一协调转发（显隐 toggle 逻辑在 inputWindow 内，见 petWindow）。
  * 左键整窗为 -webkit-app-region: drag 拖动区（OS 级拖动），拖动区会吞掉左键
  * 全部 DOM 事件，故唤出入口放在右键上；preventDefault 禁掉默认右键菜单行为。
  */
@@ -22,6 +23,49 @@ import { createAnimatedSprite, sliceFrames } from './core/sprite';
 
 const PET_WIDTH = 128;
 const PET_HEIGHT = 104;
+
+/** 提示自动消失时长（ms），与 console toast 的 TOAST_DURATION 约定一致 */
+const TOAST_DURATION = 2000;
+
+// 基础设施保留：后续里程碑 toast 复用
+// 与 console toast 同语义的最小实现：宠物窗无 React/Tailwind，用 vanilla DOM
+// 内联样式实现同款轻提示（底部居中、约 2s 自动消失；失败态红色，同 destructive）
+let toastHost: HTMLDivElement | null = null;
+function toast(message: string, variant: 'default' | 'destructive' = 'default'): void {
+  if (!toastHost) {
+    toastHost = document.createElement('div');
+    toastHost.setAttribute('role', 'status');
+    Object.assign(toastHost.style, {
+      position: 'fixed',
+      bottom: '16px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '8px',
+      pointerEvents: 'none',
+      zIndex: '50'
+    } satisfies Partial<CSSStyleDeclaration>);
+    document.body.appendChild(toastHost);
+  }
+  const item = document.createElement('div');
+  Object.assign(item.style, {
+      maxWidth: '260px',
+      padding: '8px 12px',
+      borderRadius: '6px',
+      fontSize: '14px',
+      lineHeight: '1.5',
+      textAlign: 'center',
+      wordBreak: 'break-word',
+      color: '#fff',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+      backgroundColor: variant === 'destructive' ? '#dc2626' : '#262626'
+  } satisfies Partial<CSSStyleDeclaration>);
+  item.textContent = message;
+  toastHost.appendChild(item);
+  setTimeout(() => item.remove(), TOAST_DURATION);
+}
 
 async function bootstrap(): Promise<void> {
   const container = document.getElementById('app');
@@ -66,7 +110,7 @@ async function bootstrap(): Promise<void> {
     sm.play(state);
   });
 
-  // 右键唤出：contextmenu 不受拖动区拦截，preventDefault 禁默认右键菜单
+  // 右键唤出输入框：contextmenu 不受拖动区拦截，preventDefault 禁默认右键菜单
   container.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.api.pet.clicked();

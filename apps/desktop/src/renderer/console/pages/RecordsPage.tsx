@@ -5,13 +5,18 @@
  * 底部翻页控件按 total 计算页数，切换页码重新查询；
  * 点击记录行展开/折叠全文（expandedId 状态）；
  * 筛选区（任务 19）：关键词搜索框（受控输入，变更即重置 page=1 重新查询）
- * + 时间快捷预设四选（全部/今天/最近7天/最近30天，本地时区起算），两维可组合。
+ * + 时间快捷预设四选（全部/今天/最近7天/最近30天，本地时区起算），两维可组合；
+ * 类型筛选（任务 21）：全部/文字/图片三选，UI 语义不变（M4 任务 20 契约改造：
+ * payload 不再传 type，image→hasImages:true / text→hasImages:false / 全部→缺省不传），
+ * 与关键词/时间可组合。
  * 复制（任务 20）：每条记录常驻复制按钮，点击将完整 text 写入剪贴板
  * 并弹出自写 toast 轻提示（约 2s 自动消失）；
  * 单条删除（任务 21）：每条记录常驻删除按钮，点击弹自写 dialog 确认框，
  * 确认后调 window.api.capture.delete({ ids: [id] })；成功后处理页回退——
  * 当前页删空且 page>1 时 page-1 重新查询，否则当前页重新查询
  * （用 refreshTick 触发同 payload 重新查询）；
+ * 删除确认文案的有图判断（M4 任务 20）：由 record.type === 'image' 改
+ * record.imagePaths.length > 0（type 列已随迁移 0003 移除）；
  * 勾选与批量删除（任务 22）：复选框维护 selectedIds 集合，勾选数 ≥1 时
  * 顶部浮现操作栏（已选 N 条 / 批量删除 / 取消）；「批量删除」弹确认框
  * （文案含条数），确认后调 capture.delete({ ids: [...selectedIds] })，
@@ -35,13 +40,23 @@
 import * as React from 'react';
 import type { QueryCapturesPayload, QueryCapturesResult } from '@shiguang/shared';
 import { useForm, useStore } from '@tanstack/react-form';
-import { Toaster, toast } from '../../components/ui/toast';
+import { Toaster } from '../../components/ui/toast';
 import { ConfirmDialog } from '../../components/ui/dialog';
 import { RangeTimePicker, type RangeValue } from '../../components/ui/range-time-picker';
+import { RecordRow } from './RecordRow';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 type TimePreset = 'all' | 'today' | '7d' | '30d';
+
+/** 类型筛选（任务 21）：'all'=全部（缺省不传 hasImages），image/text 映射 hasImages true/false */
+type CaptureTypeFilter = 'all' | 'text' | 'image';
+
+const TYPE_FILTERS: Array<{ key: CaptureTypeFilter; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'text', label: '文字' },
+  { key: 'image', label: '图片' },
+];
 
 const TIME_PRESETS: Array<{ key: TimePreset; label: string }> = [
   { key: 'all', label: '全部' },
@@ -96,7 +111,11 @@ export function RecordsPage() {
   const [expandedId, setExpandedId] = React.useState<number | null>(null);
   // 筛选表单（任务 31）：keyword + 时间区间，TanStack Form 驱动（同 capture-form 引擎）
   const form = useForm({
-    defaultValues: { keyword: '', range: {} as RangeValue },
+    defaultValues: {
+      keyword: '',
+      range: {} as RangeValue,
+      type: 'all' as CaptureTypeFilter,
+    },
   });
   // 表单值为筛选 payload 唯一来源：订阅 store values，变更即触发下方 effect 重查
   const filters = useStore(form.store, (state) => state.values);
@@ -120,6 +139,10 @@ export function RecordsPage() {
     if (filters.keyword) payload.keyword = filters.keyword;
     if (filters.range.from) payload.since = localDateTimeToISO(filters.range.from);
     if (filters.range.to) payload.until = localDateTimeToISO(filters.range.to);
+    // 类型筛选（任务 21/M4 任务 20）：'all' 缺省不传 hasImages（后端返回全部），
+    // image=仅含图 / text=仅无图（type 列已随迁移 0003 移除，改 hasImages 契约）
+    if (filters.type === 'image') payload.hasImages = true;
+    else if (filters.type === 'text') payload.hasImages = false;
     void window.api.capture.list(payload).then((data) => {
       if (cancelled) return;
       setResult(data);
@@ -129,6 +152,12 @@ export function RecordsPage() {
       cancelled = true;
     };
   }, [page, pageSize, filters, refreshTick]);
+
+  /** 类型筛选变更（任务 21）：写入表单并重置回第 1 页重新查询（表单值驱动 effect） */
+  const handleTypeChange = (next: CaptureTypeFilter) => {
+    form.setFieldValue('type', next);
+    setPage(1);
+  };
 
   /** 关键词变更即重置回第 1 页并重新查询（表单值驱动 effect） */
   const handleKeywordChange = (value: string) => {
@@ -213,6 +242,18 @@ export function RecordsPage() {
   // 时间区间是否实际生效（起止任一非空），用于空状态文案的筛选条件判断
   const rangeInUse = filters.range.from !== undefined && filters.range.from !== ''
     || filters.range.to !== undefined && filters.range.to !== '';
+  // 删除确认文案（任务 22/M4 任务 20）：待删记录含图（imagePaths 非空）时提示级联清理图片文件
+  const deletingRecord = deletingId === null
+    ? null
+    : result.items.find((item) => item.id === deletingId) ?? null;
+  const singleDeleteDescription = deletingRecord && deletingRecord.imagePaths.length > 0
+    ? '删除后不可恢复。将同时删除图片文件。'
+    : '删除后不可恢复。';
+  // 勾选集含图片记录（以当前页 items 为准）时批量确认框提示级联清理已选图片文件
+  const batchHasImage = result.items.some((item) => selectedIds.has(item.id) && item.imagePaths.length > 0);
+  const batchDeleteDescription = batchHasImage
+    ? '删除后不可恢复。将同时删除已选记录的图片文件。'
+    : '删除后不可恢复。';
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -249,6 +290,26 @@ export function RecordsPage() {
             </button>
           ))}
         </div>
+        {/* 类型筛选（任务 21）：全部/文字/图片三选（缺省=全部不传 hasImages），样式照时间预设 chips；
+            aria-label 以「类型：」前缀与时间预设的「全部」区分 */}
+        <div className="flex items-center gap-1">
+          {TYPE_FILTERS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              aria-label={`类型：${t.label}`}
+              aria-pressed={filters.type === t.key}
+              onClick={() => handleTypeChange(t.key)}
+              className={
+                filters.type === t.key
+                  ? 'rounded-md bg-neutral-800 px-3 py-1.5 text-sm text-white'
+                  : 'rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-600'
+              }
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
       {/* 时间区间选择（任务 30/31）：平铺 always 可见；受控字段组件，值唯一来源为表单 */}
       <form.Field name="range">
@@ -278,7 +339,7 @@ export function RecordsPage() {
       ) : null}
       {/* 空状态（任务 23）：空库显示入库引导，有筛选但无结果显示调整筛选引导（条件取表单值） */}
       {!loading && result.total === 0 ? (
-        filters.keyword !== '' || rangeInUse ? (
+        filters.keyword !== '' || rangeInUse || filters.type !== 'all' ? (
           <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-neutral-200 bg-white px-6 py-12 text-center">
             <p className="text-sm font-medium text-neutral-600">没有找到匹配的记录</p>
             <p className="text-xs text-neutral-400">试试调整关键词或时间范围</p>
@@ -293,61 +354,15 @@ export function RecordsPage() {
       {result.items.length > 0 ? (
       <ul className="flex flex-col divide-y divide-neutral-200 rounded-md border border-neutral-200 bg-white">
         {result.items.map((item) => (
-          <li
+          <RecordRow
             key={item.id}
-            className="flex cursor-pointer items-start gap-3 p-3"
-            onClick={() => setExpandedId((cur) => (cur === item.id ? null : item.id))}
-          >
-            {/* 常驻复选框（任务 22 接线勾选）：阻止冒泡避免误触展开 */}
-            <input
-              type="checkbox"
-              checked={selectedIds.has(item.id)}
-              aria-label={`选择记录 ${item.id}`}
-              className="mt-1 shrink-0"
-              onClick={(e) => e.stopPropagation()}
-              onChange={() => toggleSelected(item.id)}
-            />
-            <div className="min-w-0 flex-1">
-              <p
-                className={
-                  expandedId === item.id
-                    ? 'whitespace-pre-wrap break-words text-sm text-neutral-700'
-                    : 'line-clamp-3 whitespace-pre-wrap break-words text-sm text-neutral-700'
-                }
-              >
-                {item.text}
-              </p>
-              <p className="mt-1 text-xs text-neutral-400">
-                {new Date(item.createdAt).toLocaleString()}
-              </p>
-            </div>
-            {/* 复制按钮：写入完整 text 后弹轻提示；阻止冒泡避免误触展开 */}
-            <button
-              type="button"
-              aria-label={`复制记录 ${item.id}`}
-              className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100"
-              onClick={(e) => {
-                e.stopPropagation();
-                void navigator.clipboard.writeText(item.text).then(() => {
-                  toast('已复制到剪贴板');
-                });
-              }}
-            >
-              复制
-            </button>
-            {/* 删除按钮：弹出确认框后再真正删除；阻止冒泡避免误触展开 */}
-            <button
-              type="button"
-              aria-label={`删除记录 ${item.id}`}
-              className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeletingId(item.id);
-              }}
-            >
-              删除
-            </button>
-          </li>
+            record={item}
+            expanded={expandedId === item.id}
+            selected={selectedIds.has(item.id)}
+            onToggleExpand={() => setExpandedId((cur) => (cur === item.id ? null : item.id))}
+            onToggleSelect={() => toggleSelected(item.id)}
+            onDelete={() => setDeletingId(item.id)}
+          />
         ))}
       </ul>
       ) : null}
@@ -395,21 +410,21 @@ export function RecordsPage() {
       </div>
       {/* 轻提示容器：复制成功等反馈在此弹出，约 2s 自动消失 */}
       <Toaster />
-      {/* 单条删除确认弹窗（任务 21）：确认后删除并处理页回退 */}
+      {/* 单条删除确认弹窗（任务 21/22）：含图记录（imagePaths 非空）提示将同时删除图片文件，确认后删除并处理页回退 */}
       <ConfirmDialog
         open={deletingId !== null}
         title="确认删除该条记录？"
-        description="删除后不可恢复。"
+        description={singleDeleteDescription}
         confirmText="确认"
         confirmVariant="destructive"
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeletingId(null)}
       />
-      {/* 批量删除确认弹窗（任务 22）：文案含已选条数，确认后删除并清空选择 */}
+      {/* 批量删除确认弹窗（任务 22）：文案含已选条数，勾选集含图片时提示级联清理图片文件 */}
       <ConfirmDialog
         open={batchDeleteOpen}
         title={`确认删除已选 ${selectedIds.size} 条记录？`}
-        description="删除后不可恢复。"
+        description={batchDeleteDescription}
         confirmText="确认"
         confirmVariant="destructive"
         onConfirm={handleConfirmBatchDelete}

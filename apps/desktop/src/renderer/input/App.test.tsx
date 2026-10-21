@@ -11,6 +11,7 @@ function createApiMock(): ShiguangApi {
       create: vi.fn(),
       list: vi.fn(),
       delete: vi.fn(),
+      copyImage: vi.fn(),
     },
     console: {
       open: vi.fn(),

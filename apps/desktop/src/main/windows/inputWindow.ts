@@ -1,7 +1,7 @@
 /**
  * 输入框悬浮窗 + 显隐协调状态机（AC-3、AC-8）。
  *
- * frameless + transparent + alwaysOnTop 的 360px 宽小浮窗，主进程集中管理
+ * frameless + transparent + alwaysOnTop 的 420px 宽小浮窗，主进程集中管理
  * 显隐：宠物窗口 focusable:false 不接受焦点，输入框是唯一可聚焦窗口。
  *
  * 显隐时序：
@@ -21,9 +21,22 @@ import { computeInputPosition } from '../lib/windowGeometry';
 import { nextSuppressUntil, shouldSuppressPetClick } from '../lib/blurSuppress';
 import { getPetWindow, onPetClicked } from './petWindow';
 
-/** 输入框窗口尺寸（resizable:false，定高浮窗；宽 360 为设计约定） */
-const INPUT_WIDTH = 360;
-const INPUT_HEIGHT = 320;
+/** 输入框窗口设计尺寸（resizable:false，定高浮窗；图文混排形态 840×440，2026-10-20 高自 880 减半——编辑区内部滚动不撑外部） */
+const INPUT_WIDTH = 840;
+const INPUT_HEIGHT = 440;
+
+/**
+ * 实际窗口尺寸：设计尺寸按主屏工作区收小——小屏（如 13 寸扣菜单栏/Dock 后
+ * 高度可能不足 440）若直接用设计值，窗口底边会超出屏幕、底部控件不可达。
+ * 创建与每次定位共用此值，保证 setBounds 与 computeInputPosition 的 size 一致。
+ */
+function inputWindowSize(): { width: number; height: number } {
+  const workArea = screen.getPrimaryDisplay().workArea;
+  return {
+    width: Math.min(INPUT_WIDTH, workArea.width),
+    height: Math.min(INPUT_HEIGHT, workArea.height),
+  };
+}
 
 /** 输入框与宠物窗口之间的横向间距 */
 const PET_GAP = 12;
@@ -69,13 +82,9 @@ function showNearPet(): void {
           height: PET_HEIGHT,
         };
 
-  const { x, y } = computeInputPosition(
-    petBounds,
-    { width: INPUT_WIDTH, height: INPUT_HEIGHT },
-    workArea,
-    PET_GAP,
-  );
-  win.setBounds({ x, y, width: INPUT_WIDTH, height: INPUT_HEIGHT });
+  const size = inputWindowSize();
+  const { x, y } = computeInputPosition(petBounds, size, workArea, PET_GAP);
+  win.setBounds({ x, y, ...size });
   win.show();
   win.focus();
 }
@@ -117,14 +126,15 @@ export function registerInputWindowIpc(): void {
 export function createInputWindow(): BrowserWindow {
   if (inputWindow && !inputWindow.isDestroyed()) return inputWindow;
 
+  const size = inputWindowSize();
   inputWindow = new BrowserWindow({
     frame: false,
     transparent: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
-    width: INPUT_WIDTH,
-    height: INPUT_HEIGHT,
+    width: size.width,
+    height: size.height,
     show: false,
     webPreferences: {
       contextIsolation: true,

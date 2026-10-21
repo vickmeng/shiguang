@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import type { RunnableMigration, UmzugStorage } from 'umzug';
 import { migration as initMigration } from './migrations/0001_init';
+import { migration as attachmentMigration } from './migrations/0002_attachment';
+import { migration as dropTypeMigration } from './migrations/0003_drop_type';
 
 /**
  * 已执行迁移记录表（design.md 3.2 节：storage 自定义为 SQLite 表记录已执行迁移，
@@ -56,7 +58,11 @@ class SqliteMigrationStorage implements UmzugStorage<Database.Database> {
  * migrations/ 目录下的全部迁移（umzug RunnableMigration 形态，按序执行）。
  * 新增迁移文件时在此登记。
  */
-const migrations: RunnableMigration<Database.Database>[] = [initMigration];
+const migrations: RunnableMigration<Database.Database>[] = [
+  initMigration,
+  attachmentMigration,
+  dropTypeMigration,
+];
 
 /**
  * 初始化数据库：打开 better-sqlite3 → PRAGMA foreign_keys = ON → 执行全部待运行迁移。

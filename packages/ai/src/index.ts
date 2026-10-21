@@ -8,6 +8,7 @@ export { initDatabase } from './db';
 export {
   setCaptureDatabase,
   createCapture,
+  createCaptureWithAttachments,
   listCaptures,
   queryCaptures,
   deleteCaptures,

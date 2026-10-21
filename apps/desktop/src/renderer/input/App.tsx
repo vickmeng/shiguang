@@ -1,8 +1,9 @@
 /**
  * 输入框装配层（任务 18）：只做装配——
- * 宽约 360px 的卡片容器（Tailwind 圆角白底浮窗观感）渲染 <CaptureForm />，
+ * 卡片容器（宽随窗口、上限 840px，Tailwind 圆角白底浮窗观感）渲染 <CaptureForm />，
  * 右上角常驻关闭按钮（input.close 收起窗口；置于装配层而非表单内，
- * 使「✓ 已拾光」成功态下也可关闭）。
+ * 使「✓ 已拾光」成功态下也可关闭）。窗口尺寸 420×440（2026-10-20 自 360×320 上调，
+ * 适配图文混排），容器 h-full 充满窗口。
  *
  * 任务 16：关闭按钮旁新增「打开后台」按钮（console.open 唤起后台窗口）。
  */
@@ -12,8 +13,8 @@ import { CaptureForm } from './features/capture/capture-form';
 
 export function App() {
   return (
-    // pt-10：为右上角绝对定位的按钮（top-2 + h-7 = 36px）留出空间，避免遮挡 textarea
-    <div className="relative w-[360px] rounded-xl border border-neutral-200 bg-white px-4 pb-4 pt-10 shadow-lg">
+    // pt-10：为右上角绝对定位的按钮（top-2 + h-7 = 36px）留出空间，避免遮挡编辑器
+    <div className="relative flex h-full w-full max-w-[840px] flex-col rounded-xl border border-neutral-200 bg-white px-4 pb-4 pt-10 shadow-lg">
       <Button
         type="button"
         variant="ghost"

@@ -27,6 +27,13 @@ body {
   margin: 0;
   padding: 0;
   background: transparent;
+  /* 高度链：浮动窗 renderer（输入框）依赖 h-full 充满定高 BrowserWindow；
+     普通窗（console）内容自然撑高，不受 100% 约束影响 */
+  height: 100%;
   /* 默认禁止文本选择，输入场景由各输入组件自行放开 */
   user-select: none;
+}
+
+#app {
+  height: 100%;
 }

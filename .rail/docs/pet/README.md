@@ -11,5 +11,5 @@
 
 - [ ] `-webkit-app-region: drag` 区域单击可能被系统偶发吞掉，导致单击唤出失效（预案：双击唤出或留 no-drag 可点热区，已备但不预防性实现，问题复现再启用）
 - [ ] 精灵图 9 行动效仅注册第 1 行 idle（row 0, 5 帧, fps 8, loop），其余 8 行动效素材已入仓未注册，M8 按需启用
-- [ ] 宠物拖动位置不持久化（M3 开机自启场景重新评估坐标持久化）
+- [ ] 宠物拖动位置不持久化（M3 开机自启场景重新评估坐标持久化；M3 已暂缓，重启该需求时一并评估）
 - [x] 开发者工具入口收敛到下个迭代的真实界面窗口：主窗菜单加「开发者工具」项，覆盖主窗（attach）、输入框（detach，`Option+Cmd+I` 手动可用）、宠物（detach，`focusable:false` 只能代码 `openDevTools()` 开）。已确诊：`-webkit-app-region: drag` 区域 macOS 真实输入下零 DOM 事件，唤出入口放右键 contextmenu；左键拖动保留 OS 原生手感——M2 已落地后台窗右键 contextmenu toggle DevTools，输入框/宠物窗维持现状
