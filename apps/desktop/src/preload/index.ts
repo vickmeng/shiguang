@@ -10,9 +10,14 @@ import {
   type CaptureRecord,
   type CopyImagePayload,
   type CreateCapturePayload,
+  type CreateTagPayload,
   type DeleteCapturesPayload,
+  type DeleteTagPayload,
   type QueryCapturesPayload,
   type QueryCapturesResult,
+  type RenameTagPayload,
+  type SetLastTagsPayload,
+  type Tag,
 } from '@shiguang/shared';
 
 /** 暴露给渲染进程的 API 形状（env.d.ts 中声明为 window.api 的全局类型） */
@@ -26,6 +31,20 @@ export interface ShiguangApi {
     delete(payload: DeleteCapturesPayload): Promise<void>;
     /** 将图片记录复制到系统剪贴板（非图片记录或文件缺失时 reject） */
     copyImage(payload: CopyImagePayload): Promise<void>;
+  };
+  tags: {
+    /** 列出全部标签（按 id 升序） */
+    list(): Promise<Tag[]>;
+    /** 新建标签（重名时返回已有条目）；名称违规时 reject */
+    create(payload: CreateTagPayload): Promise<Tag>;
+    /** 重命名标签；标签不存在或名称违规时 reject */
+    rename(payload: RenameTagPayload): Promise<Tag>;
+    /** 删除标签（不回溯已入库记录快照）；不存在时静默 */
+    delete(payload: DeleteTagPayload): Promise<void>;
+    /** 读取上次提交记忆的标签名组合（缺失/损坏降级空数组） */
+    lastGet(): Promise<string[]>;
+    /** 记忆本次提交的标签组合（与库条目解耦） */
+    lastSet(payload: SetLastTagsPayload): Promise<void>;
   };
   console: {
     /** 打开（或聚焦）后台管理窗口 */
@@ -54,6 +73,14 @@ const api: ShiguangApi = {
     list: (payload) => ipcRenderer.invoke(IPC.captureList, payload),
     delete: (payload) => ipcRenderer.invoke(IPC.captureDelete, payload),
     copyImage: (payload) => ipcRenderer.invoke(IPC.captureCopyImage, payload),
+  },
+  tags: {
+    list: () => ipcRenderer.invoke(IPC.tagsList),
+    create: (payload) => ipcRenderer.invoke(IPC.tagsCreate, payload),
+    rename: (payload) => ipcRenderer.invoke(IPC.tagsRename, payload),
+    delete: (payload) => ipcRenderer.invoke(IPC.tagsDelete, payload),
+    lastGet: () => ipcRenderer.invoke(IPC.tagsLastGet),
+    lastSet: (payload) => ipcRenderer.invoke(IPC.tagsLastSet, payload),
   },
   console: {
     open: () => ipcRenderer.send(IPC.consoleOpen),

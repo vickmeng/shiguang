@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config as loadEnv } from 'dotenv';
 import { app } from 'electron';
-import { initDatabase, setCaptureDatabase } from '@shiguang/ai';
+import { initDatabase, setCaptureDatabase, setTagDatabase } from '@shiguang/ai';
 import { createPetWindow } from './windows/petWindow';
 import { createInputWindow } from './windows/inputWindow';
 import { createTray } from './tray';
@@ -35,10 +35,13 @@ function findRootEnv(startDir: string): string | undefined {
 const rootEnvPath = findRootEnv(app.getAppPath());
 if (rootEnvPath) loadEnv({ path: rootEnvPath });
 
-// 2. 初始化数据库并注入 captureDao 连接（单一 SQLite 文件：userData/shiguang.db）
+// 2. 初始化数据库并注入 captureDao/tagDao 连接（单一 SQLite 文件：userData/shiguang.db，
+// 同一连接注入两个 DAO，initDatabase 仅调用一次）
 // app.getPath('userData') 在 app ready 前可用
 const dbPath = path.join(app.getPath('userData'), 'shiguang.db');
-setCaptureDatabase(initDatabase(dbPath));
+const db = initDatabase(dbPath);
+setCaptureDatabase(db);
+setTagDatabase(db);
 
 // 3. app ready 后装配 M1 窗口：
 // 图片协议（须早于窗口创建，渲染端 <img> 才能走 shiguang-image://）

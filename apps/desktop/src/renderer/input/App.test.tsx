@@ -13,6 +13,14 @@ function createApiMock(): ShiguangApi {
       delete: vi.fn(),
       copyImage: vi.fn(),
     },
+    tags: {
+      list: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      rename: vi.fn(),
+      delete: vi.fn(),
+      lastGet: vi.fn().mockResolvedValue([]),
+      lastSet: vi.fn().mockResolvedValue(undefined),
+    },
     console: {
       open: vi.fn(),
     },

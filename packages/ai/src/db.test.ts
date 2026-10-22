@@ -7,6 +7,7 @@ import { initDatabase } from './db';
 import { migration } from './migrations/0001_init';
 import { migration as attachmentMigration } from './migrations/0002_attachment';
 import { migration as dropTypeMigration } from './migrations/0003_drop_type';
+import { migration as tagsMigration } from './migrations/0004_tags';
 
 describe('initDatabase', () => {
   let tmpDir: string;
@@ -56,12 +57,14 @@ describe('initDatabase', () => {
     const upSpy = vi.spyOn(migration, 'up');
     const attachmentUpSpy = vi.spyOn(attachmentMigration, 'up');
     const dropTypeUpSpy = vi.spyOn(dropTypeMigration, 'up');
+    const tagsUpSpy = vi.spyOn(tagsMigration, 'up');
 
     const db1 = initDatabase(dbPath);
     db1.close();
     expect(upSpy).toHaveBeenCalledTimes(1);
     expect(attachmentUpSpy).toHaveBeenCalledTimes(1);
     expect(dropTypeUpSpy).toHaveBeenCalledTimes(1);
+    expect(tagsUpSpy).toHaveBeenCalledTimes(1);
 
     // 迁移 DDL 均使用裸 CREATE TABLE / ADD COLUMN / DROP COLUMN：若被重复执行必然抛错；
     // 第二次调用整体不抛错且 up 未被再次调用，即证明迁移未重复执行。
@@ -69,12 +72,13 @@ describe('initDatabase', () => {
     expect(upSpy).toHaveBeenCalledTimes(1);
     expect(attachmentUpSpy).toHaveBeenCalledTimes(1);
     expect(dropTypeUpSpy).toHaveBeenCalledTimes(1);
+    expect(tagsUpSpy).toHaveBeenCalledTimes(1);
 
     const logged = db2
       .prepare('SELECT name FROM _migrations ORDER BY name')
       .all()
       .map((row) => (row as { name: string }).name);
-    expect(logged).toEqual(['0001_init', '0002_attachment', '0003_drop_type']);
+    expect(logged).toEqual(['0001_init', '0002_attachment', '0003_drop_type', '0004_tags']);
 
     db2.close();
   });
@@ -198,6 +202,109 @@ describe('迁移 0003_drop_type', () => {
 
     // 回填后表可正常按 0002 契约写入（type 列带默认值与 CHECK）
     db.prepare(`INSERT INTO records (text, type) VALUES ('down 后新行', 'image')`).run();
+
+    db.close();
+  });
+});
+
+describe('迁移 0004_tags', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-migration-0004-test-'));
+    dbPath = join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('迁移后 tags 表含 id/name/color/created_at 四列且 name 有 UNIQUE 索引，records 含 tags 列（NOT NULL、缺省 []）', () => {
+    const db = initDatabase(dbPath);
+
+    const tagCols = db
+      .prepare('PRAGMA table_info(tags)')
+      .all() as unknown as Array<{ name: string; notnull: number }>;
+    expect(tagCols.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['id', 'name', 'color', 'created_at']),
+    );
+
+    const uniqueIndex = (
+      db.prepare('PRAGMA index_list(tags)').all() as unknown as Array<{
+        name: string;
+        unique: number;
+      }>
+    ).find((idx) => idx.unique === 1);
+    expect(uniqueIndex).toBeDefined();
+    const indexCols = db
+      .prepare(`PRAGMA index_info(${uniqueIndex!.name})`)
+      .all() as unknown as Array<{ name: string }>;
+    expect(indexCols.map((c) => c.name)).toContain('name');
+
+    const recordCols = db
+      .prepare('PRAGMA table_info(records)')
+      .all() as unknown as Array<{ name: string; notnull: number; dflt_value: string | null }>;
+    const tagsCol = recordCols.find((c) => c.name === 'tags');
+    expect(tagsCol).toBeDefined();
+    expect(tagsCol!.notnull).toBe(1);
+    expect(tagsCol!.dflt_value).toBe(`'[]'`);
+
+    db.close();
+  });
+
+  it('旧库（0003 态已有记录行）升级后旧行 tags 读出 []，新行缺省 []', async () => {
+    // 手工构造仅应用 0001~0003 的"旧库"并写入记录行
+    const oldDb = new Database(dbPath);
+    oldDb.pragma('foreign_keys = ON');
+    await migration.up({ context: oldDb });
+    await attachmentMigration.up({ context: oldDb });
+    await dropTypeMigration.up({ context: oldDb });
+    oldDb.prepare(`INSERT INTO records (text) VALUES ('旧记录')`).run();
+    oldDb.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(migration.name);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(attachmentMigration.name);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(dropTypeMigration.name);
+    oldDb.close();
+
+    // 再次 initDatabase：应跳过 0001~0003、仅应用 0004
+    const db = initDatabase(dbPath);
+
+    const oldRow = db.prepare(`SELECT tags FROM records WHERE text = '旧记录'`).get() as {
+      tags: string;
+    };
+    expect(oldRow.tags).toBe('[]');
+
+    db.prepare(`INSERT INTO records (text) VALUES ('新记录')`).run();
+    const newRow = db.prepare(`SELECT tags FROM records WHERE text = '新记录'`).get() as {
+      tags: string;
+    };
+    expect(newRow.tags).toBe('[]');
+
+    db.close();
+  });
+
+  it('migration.down() 后 tags 表与 records.tags 列均消失', async () => {
+    const db = initDatabase(dbPath);
+    db.prepare(`INSERT INTO tags (name, color) VALUES ('工作', '#f59e0b')`).run();
+    db.prepare(`INSERT INTO records (text, tags) VALUES ('带标签', '["工作"]')`).run();
+
+    await tagsMigration.down({ context: db });
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tags'")
+      .all();
+    expect(tables).toEqual([]);
+
+    const recordCols = db
+      .prepare('PRAGMA table_info(records)')
+      .all() as unknown as Array<{ name: string }>;
+    expect(recordCols.map((c) => c.name)).not.toContain('tags');
+
+    // records 数据不受 down 影响
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
+    ).toBe(1);
 
     db.close();
   });

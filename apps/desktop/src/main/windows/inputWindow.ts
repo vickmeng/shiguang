@@ -21,9 +21,9 @@ import { computeInputPosition } from '../lib/windowGeometry';
 import { nextSuppressUntil, shouldSuppressPetClick } from '../lib/blurSuppress';
 import { getPetWindow, onPetClicked } from './petWindow';
 
-/** 输入框窗口设计尺寸（resizable:false，定高浮窗；图文混排形态 840×440，2026-10-20 高自 880 减半——编辑区内部滚动不撑外部） */
+/** 输入框窗口设计尺寸（resizable:false，定高浮窗；图文混排形态 840×480（含标签 chips 区），2026-10-20 高自 880 减半——编辑区内部滚动不撑外部） */
 const INPUT_WIDTH = 840;
-const INPUT_HEIGHT = 440;
+const INPUT_HEIGHT = 480;
 
 /**
  * 实际窗口尺寸：设计尺寸按主屏工作区收小——小屏（如 13 寸扣菜单栏/Dock 后

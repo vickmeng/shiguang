@@ -22,6 +22,8 @@ interface RecordRow {
   id: number;
   text: string;
   source_app: string | null;
+  document: string | null;
+  tags: string;
   created_at: string;
   /** LEFT JOIN attachments 得到的相对路径，无附件行时为 null */
   image_path: string | null;
@@ -38,6 +40,20 @@ interface AttachmentRow {
 }
 
 /**
+ * 解析 records.tags JSON 列为标签名数组。
+ *
+ * 损坏 JSON 或非数组降级为 []，数组内非字符串元素被过滤。
+ */
+function parseTags(json: string): string[] {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * 将单条 JOIN 行转为 CaptureRecord。
  *
  * 单行场景（createCapture 的 RETURNING）下 imagePaths 至多含一个
@@ -48,6 +64,8 @@ function toRecord(row: RecordRow): CaptureRecord {
     id: row.id,
     text: row.text,
     sourceApp: row.source_app,
+    document: row.document,
+    tags: parseTags(row.tags),
     createdAt: row.created_at,
     imagePaths: row.image_path === null ? [] : [row.image_path],
   };
@@ -77,11 +95,12 @@ function toRecords(rows: RecordRow[]): CaptureRecord[] {
 /**
  * 写入一条纯文字捕获记录，返回已入库的 CaptureRecord。
  *
- * @param input 记录内容（sourceApp 缺省为 null）
+ * @param input 记录内容（document 为 Lexical EditorState JSON，缺省为 null；
+ *   sourceApp 缺省为 null；tags 缺省 = 不打标，入库 '[]'）
  * @returns 已入库的记录（含数据库生成的 id/createdAt，imagePaths 恒为 []）
  */
 export function createCapture(
-  input: { text: string; sourceApp?: string | null },
+  input: { text: string; document?: string | null; sourceApp?: string | null; tags?: string[] },
 ): CaptureRecord {
   if (!db) {
     throw new Error('capture database not initialized: call setCaptureDatabase first');
@@ -89,11 +108,16 @@ export function createCapture(
 
   const row = db
     .prepare(
-      `INSERT INTO records (text, source_app, created_at)
-       VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      `INSERT INTO records (text, document, source_app, tags, created_at)
+       VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        RETURNING *, NULL AS image_path`,
     )
-    .get(input.text, input.sourceApp ?? null) as unknown as RecordRow;
+    .get(
+      input.text,
+      input.document ?? null,
+      input.sourceApp ?? null,
+      JSON.stringify(input.tags ?? []),
+    ) as unknown as RecordRow;
 
   return toRecord(row);
 }
@@ -106,13 +130,15 @@ export function createCapture(
  * （record_id 关联、file_path 为相对 userData 的路径、sizeBytes 缺省为 null）；
  * 任一步失败整体回滚，保证两表一致。
  *
- * @param input 记录内容（document/sourceApp 缺省为 null；attachments 无图时传 []）
+ * @param input 记录内容（document/sourceApp 缺省为 null；tags 缺省 = 不打标；
+ *   attachments 无图时传 []）
  * @returns 已入库的记录（imagePaths 由 input.attachments 的 filePath 顺序组装）
  */
 export function createCaptureWithAttachments(input: {
   text: string;
   document?: string | null;
   sourceApp?: string | null;
+  tags?: string[];
   attachments: Array<{ filePath: string; sizeBytes?: number }>;
 }): CaptureRecord {
   const database = db;
@@ -123,14 +149,15 @@ export function createCaptureWithAttachments(input: {
   return database.transaction(() => {
     const row = database
       .prepare(
-        `INSERT INTO records (text, document, source_app, created_at)
-         VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        `INSERT INTO records (text, document, source_app, tags, created_at)
+         VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          RETURNING *`,
       )
       .get(
         input.text,
         input.document ?? null,
         input.sourceApp ?? null,
+        JSON.stringify(input.tags ?? []),
       ) as unknown as Omit<RecordRow, 'image_path'>;
 
     const insertAttachment = database.prepare(
@@ -142,6 +169,7 @@ export function createCaptureWithAttachments(input: {
     }
 
     const record = toRecord({ ...row, image_path: null });
+    record.tags = input.tags ?? [];
     record.imagePaths = input.attachments.map((attachment) => attachment.filePath);
     return record;
   })();
@@ -229,6 +257,15 @@ export function queryCaptures(
     conditions.push(
       `NOT EXISTS (SELECT 1 FROM attachments a WHERE a.record_id = records.id)`,
     );
+  }
+  if (input.tagNames !== undefined && input.tagNames.length > 0) {
+    // tags 列为标签名 JSON 数组快照，参数带引号 LIKE 精确到数组元素，避免
+    // 'AI' 误命中快照 ["AIGC"]；多值任一命中（OR）
+    const quoted = input.tagNames.map((n) => '"' + n + '"');
+    conditions.push(
+      '(' + quoted.map(() => `records.tags LIKE '%' || ? || '%'`).join(' OR ') + ')',
+    );
+    params.push(...quoted);
   }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
 

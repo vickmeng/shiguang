@@ -2,10 +2,11 @@
  * 拾光输入表单（任务 15，Lexical 形态；TanStack Form 自输入框退役）。
  *
  * 行为契约：
- * - 布局（2026-10-20 微信式改版）：边框容器即整体——ContentEditable 输入区
- *   在容器内滚动（flex-1 + overflow-y-auto），底部操作条（pasteHint + 提交
- *   按钮）固定在边框容器内不参与滚动；placeholder 与字数统计展示已移除；聚焦态
- *   边框经容器 focus-within 实现
+ * - 布局（2026-10-21 标签栏独立改版）：自上而下为标签栏（独立圆角边框 +
+ *   浅灰底容器，内含 TagSelect，为元数据栏）→ 编辑器卡片（原边框容器：
+ *   ContentEditable 输入区在容器内滚动（flex-1 + overflow-y-auto），底部
+ *   操作条（pasteHint + 提交按钮）固定在边框容器内不参与滚动）；placeholder
+ *   与字数统计展示已移除；聚焦态边框经容器 focus-within 实现
  * - LexicalComposer（namespace 'shiguang-capture'，nodes: Paragraph/Text/Image）
  *   为根，RichTextPlugin 的 ContentEditable 取代原 textarea（autoFocus、
  *   min-h-[160px] flex-1 overflow-y-auto 内部滚动不撑外部窗口）
@@ -41,6 +42,13 @@
  *   否则点击「拾光」按钮的 mousedown 先触发 blur 同步收起窗口，click 落不到按钮。
  *   收起由主进程 inputWindow 的窗口级原生 blur 事件承担（焦点离开整个输入框
  *   窗口才触发），preload 的 input.blur() 仅作预留口子保留。
+ * - 标签接入（任务 13）：挂载时一次性并行 `tags:list`（标签库）与
+ *   `tags:lastGet`（预选回填，库外记忆名称灰显 chip 仍在，读取失败降级无预选）；
+ *   TagSelect 挂于编辑器卡片上方的独立标签栏（元数据栏，不在编辑器边框容器内）。
+ *   提交 payload 带 `tags: selectedTags`；成功闪现定时器内（编辑器清空之前）
+ *   追加 `tags:lastSet` 记忆本次组合；成功路径不清空 selectedTags（chips 保留
+ *   = 本次组合的可视呈现）；失败路径标签状态不动。即席新建（onCreateTag 重名
+ *   返回已有条目）与下拉直删由 TagSelect 组件契约承担，本组件不回滚。
  */
 import * as React from 'react';
 import type { InitialConfigType } from '@lexical/react/LexicalComposer';
@@ -60,7 +68,9 @@ import {
   TextNode,
   type PasteCommandType,
 } from 'lexical';
+import type { Tag } from '@shiguang/shared';
 import { Button } from '../../../components/ui/button';
+import { TagSelect } from '../../../components/ui/tag-select';
 import { $createImageNode, ImageNode } from './image-node';
 
 const MAX_LENGTH = 5000;
@@ -90,6 +100,16 @@ export function CaptureFormInner() {
   const imageBytesRef = React.useRef<Map<string, Uint8Array>>(new Map());
   const statusTimerRef = React.useRef<number | null>(null);
   const [pasteHint, setPasteHint] = React.useState<string | null>(null);
+  const [tagLib, setTagLib] = React.useState<Tag[]>([]);
+  const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
+
+  // 标签接入：一次性并行拉标签库与上次提交记忆的组合（记忆读取失败降级无预选）
+  React.useEffect(() => {
+    void window.api.tags.list().then(setTagLib);
+    // catch：记忆文件缺失/损坏时主端降级空数组，但 reject 路径（如 IO 错误）
+    // 同样须静默降级为无预选（unhandled rejection 会污染测试与运行时日志）
+    void window.api.tags.lastGet().then(setSelectedTags).catch(() => {});
+  }, []);
 
   React.useEffect(
     () =>
@@ -211,9 +231,12 @@ export function CaptureFormInner() {
         text,
         document,
         images: bytes.map((data) => ({ data, sizeBytes: data.length })),
+        tags: selectedTags,
       });
       setStatus('success');
       statusTimerRef.current = window.setTimeout(() => {
+        // 编辑器清空之前记忆本次提交的标签组合（与库条目解耦）
+        void window.api.tags.lastSet({ names: selectedTags });
         editor.update(() => {
           for (const node of $nodesOfType(ImageNode)) {
             const src = node.getSrc();
@@ -251,7 +274,28 @@ export function CaptureFormInner() {
           void handleSubmit();
         }}
       >
-        {/* 边框容器即整体（微信式布局）：滚动只发生在输入区（ContentEditable），
+        {/* 标签栏（独立元数据栏，2026-10-21）：独立圆角边框 + 浅灰底容器，
+            位于编辑器卡片上方；chips 保留 = 本次组合的可视呈现 */}
+        <div className="rounded-md border border-neutral-300 bg-neutral-50 px-2 py-1.5">
+          <TagSelect
+            value={selectedTags}
+            onChange={setSelectedTags}
+            tags={tagLib}
+            onDeleteTag={(tag) =>
+              window.api.tags
+                .delete({ id: tag.id })
+                .then(() => setTagLib((cur) => cur.filter((t) => t.id !== tag.id)))
+            }
+            onCreateTag={(name) =>
+              window.api.tags.create({ name }).then((tag) => {
+                setTagLib((cur) => [...cur.filter((t) => t.id !== tag.id), tag]);
+                return tag;
+              })
+            }
+            aria-label="标签"
+          />
+        </div>
+        {/* 编辑器卡片（原边框容器）：滚动只发生在输入区（ContentEditable），
             底部操作条（提示 + 提交按钮）固定在边框容器内、不随内容滚动 */}
         <div className="flex min-h-0 flex-1 flex-col rounded-md border border-neutral-300 focus-within:border-neutral-400">
           <RichTextPlugin

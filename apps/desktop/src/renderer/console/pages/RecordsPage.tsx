@@ -6,9 +6,8 @@
  * 点击记录行展开/折叠全文（expandedId 状态）；
  * 筛选区（任务 19）：关键词搜索框（受控输入，变更即重置 page=1 重新查询）
  * + 时间快捷预设四选（全部/今天/最近7天/最近30天，本地时区起算），两维可组合；
- * 类型筛选（任务 21）：全部/文字/图片三选，UI 语义不变（M4 任务 20 契约改造：
- * payload 不再传 type，image→hasImages:true / text→hasImages:false / 全部→缺省不传），
- * 与关键词/时间可组合。
+ * 类型筛选已移除（2026-10-21）：记录均为图文混排形态，全部/文字/图片三选无意义，
+ * 表单 type 字段与 payload hasImages 映射一并下线（DAO 的 hasImages 查询能力保留不动）。
  * 复制（任务 20）：每条记录常驻复制按钮，点击将完整 text 写入剪贴板
  * 并弹出自写 toast 轻提示（约 2s 自动消失）；
  * 单条删除（任务 21）：每条记录常驻删除按钮，点击弹自写 dialog 确认框，
@@ -35,28 +34,26 @@
  * 今天=[今日 00:00, 当前时刻]、7d/30d=[对应起点, 当前时刻]、全部=清空起止，
  * payload 一律从表单值换算（range.from/to 经 localDateTimeToISO 得 since/until），
  * 预设高亮仅存于 UI（activePreset），随手动区间变更互斥切换；
- * 变更均重置 page=1 重查。
+ * 变更均重置 page=1 重查；
+ * 标签筛选（任务 18）：筛选区挂 TagSelect（allowCreate=false 只选已有、
+ *   allowDelete=false 不渲染下拉 × 防误触直删库，Enter 无候选即忽略）——
+ *   挂载时 tags:list 拉标签库 tagLib，并派生 tagColorMap
+ * （name→color，传给 RecordRow 供 chips 配色，任务 19 消费）；选中写入表单 tags 字段
+ * 并重置 page=1；payload 在 filters.tags 非空时带 tagNames（后端任一命中 OR），
+ * 与关键词/时间同表单组合；空状态判断增 filters.tags.length > 0。
  */
 import * as React from 'react';
-import type { QueryCapturesPayload, QueryCapturesResult } from '@shiguang/shared';
+import type { QueryCapturesPayload, QueryCapturesResult, Tag } from '@shiguang/shared';
 import { useForm, useStore } from '@tanstack/react-form';
 import { Toaster } from '../../components/ui/toast';
 import { ConfirmDialog } from '../../components/ui/dialog';
 import { RangeTimePicker, type RangeValue } from '../../components/ui/range-time-picker';
+import { TagSelect } from '../../components/ui/tag-select';
 import { RecordRow } from './RecordRow';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 type TimePreset = 'all' | 'today' | '7d' | '30d';
-
-/** 类型筛选（任务 21）：'all'=全部（缺省不传 hasImages），image/text 映射 hasImages true/false */
-type CaptureTypeFilter = 'all' | 'text' | 'image';
-
-const TYPE_FILTERS: Array<{ key: CaptureTypeFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'text', label: '文字' },
-  { key: 'image', label: '图片' },
-];
 
 const TIME_PRESETS: Array<{ key: TimePreset; label: string }> = [
   { key: 'all', label: '全部' },
@@ -114,7 +111,7 @@ export function RecordsPage() {
     defaultValues: {
       keyword: '',
       range: {} as RangeValue,
-      type: 'all' as CaptureTypeFilter,
+      tags: [] as string[],
     },
   });
   // 表单值为筛选 payload 唯一来源：订阅 store values，变更即触发下方 effect 重查
@@ -129,6 +126,19 @@ export function RecordsPage() {
   const [batchDeleteOpen, setBatchDeleteOpen] = React.useState(false);
   // 同 payload 重新查询的信号（删除后当前页仍有数据时 +1 触发 effect 重查）
   const [refreshTick, setRefreshTick] = React.useState(0);
+  // 标签库（任务 18）：挂载时 tags:list 拉取，下拉删除后 refresh
+  const [tagLib, setTagLib] = React.useState<Tag[]>([]);
+  const loadTagLib = React.useCallback(() => {
+    void window.api.tags.list().then(setTagLib);
+  }, []);
+  React.useEffect(() => {
+    loadTagLib();
+  }, [loadTagLib]);
+  // name→color 映射：传给 RecordRow 供 chips 配色（任务 19 消费）
+  const tagColorMap = React.useMemo(
+    () => Object.fromEntries(tagLib.map((t) => [t.name, t.color])),
+    [tagLib]
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -139,10 +149,8 @@ export function RecordsPage() {
     if (filters.keyword) payload.keyword = filters.keyword;
     if (filters.range.from) payload.since = localDateTimeToISO(filters.range.from);
     if (filters.range.to) payload.until = localDateTimeToISO(filters.range.to);
-    // 类型筛选（任务 21/M4 任务 20）：'all' 缺省不传 hasImages（后端返回全部），
-    // image=仅含图 / text=仅无图（type 列已随迁移 0003 移除，改 hasImages 契约）
-    if (filters.type === 'image') payload.hasImages = true;
-    else if (filters.type === 'text') payload.hasImages = false;
+    // 标签筛选（任务 18）：非空时带 tagNames（后端任一命中 OR），空数组/缺省不过滤
+    if (filters.tags.length > 0) payload.tagNames = filters.tags;
     void window.api.capture.list(payload).then((data) => {
       if (cancelled) return;
       setResult(data);
@@ -152,12 +160,6 @@ export function RecordsPage() {
       cancelled = true;
     };
   }, [page, pageSize, filters, refreshTick]);
-
-  /** 类型筛选变更（任务 21）：写入表单并重置回第 1 页重新查询（表单值驱动 effect） */
-  const handleTypeChange = (next: CaptureTypeFilter) => {
-    form.setFieldValue('type', next);
-    setPage(1);
-  };
 
   /** 关键词变更即重置回第 1 页并重新查询（表单值驱动 effect） */
   const handleKeywordChange = (value: string) => {
@@ -290,26 +292,21 @@ export function RecordsPage() {
             </button>
           ))}
         </div>
-        {/* 类型筛选（任务 21）：全部/文字/图片三选（缺省=全部不传 hasImages），样式照时间预设 chips；
-            aria-label 以「类型：」前缀与时间预设的「全部」区分 */}
-        <div className="flex items-center gap-1">
-          {TYPE_FILTERS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              aria-label={`类型：${t.label}`}
-              aria-pressed={filters.type === t.key}
-              onClick={() => handleTypeChange(t.key)}
-              className={
-                filters.type === t.key
-                  ? 'rounded-md bg-neutral-800 px-3 py-1.5 text-sm text-white'
-                  : 'rounded-md border border-neutral-200 px-3 py-1.5 text-sm text-neutral-600'
-              }
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {/* 标签筛选（任务 18）：TagSelect 复用输入框组件（allowCreate=false 只选已有、
+            allowDelete=false 防误触 × 直删库；即席新建是输入框场景语义）；选中写表单
+            tags 字段并重置 page=1，与关键词/时间同表单组合进同一 payload */}
+        <TagSelect
+          allowCreate={false}
+          allowDelete={false}
+          value={filters.tags}
+          onChange={(next) => {
+            form.setFieldValue('tags', next);
+            setPage(1);
+          }}
+          tags={tagLib}
+          onDeleteTag={(tag) => void window.api.tags.delete({ id: tag.id }).then(loadTagLib)}
+          aria-label="筛选标签"
+        />
       </div>
       {/* 时间区间选择（任务 30/31）：平铺 always 可见；受控字段组件，值唯一来源为表单 */}
       <form.Field name="range">
@@ -339,7 +336,7 @@ export function RecordsPage() {
       ) : null}
       {/* 空状态（任务 23）：空库显示入库引导，有筛选但无结果显示调整筛选引导（条件取表单值） */}
       {!loading && result.total === 0 ? (
-        filters.keyword !== '' || rangeInUse || filters.type !== 'all' ? (
+        filters.keyword !== '' || rangeInUse || filters.tags.length > 0 ? (
           <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-neutral-200 bg-white px-6 py-12 text-center">
             <p className="text-sm font-medium text-neutral-600">没有找到匹配的记录</p>
             <p className="text-xs text-neutral-400">试试调整关键词或时间范围</p>
@@ -362,6 +359,7 @@ export function RecordsPage() {
             onToggleExpand={() => setExpandedId((cur) => (cur === item.id ? null : item.id))}
             onToggleSelect={() => toggleSelected(item.id)}
             onDelete={() => setDeletingId(item.id)}
+            tagColors={tagColorMap}
           />
         ))}
       </ul>

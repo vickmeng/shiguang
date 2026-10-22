@@ -52,6 +52,35 @@ describe('createCapture', () => {
 
     expect(record.sourceApp).toBe('WeChat');
   });
+
+  it('tags 缺省读回 []', () => {
+    const record = createCapture({ text: '无标签' });
+
+    expect(record.tags).toEqual([]);
+  });
+
+  it('document 传入时原样读回（Lexical EditorState JSON）', () => {
+    const record = createCapture({
+      text: '带版式',
+      document: '{"root":{"children":[]}}',
+    });
+
+    expect(record.document).toBe('{"root":{"children":[]}}');
+  });
+
+  it('document 缺省读回 null', () => {
+    const record = createCapture({ text: '无版式' });
+
+    expect(record.document).toBeNull();
+  });
+
+  it('tags 传入时 JSON 落库，listCaptures 读回相等数组', () => {
+    createCapture({ text: '带标签', tags: ['工作', '灵感'] });
+
+    const records = listCaptures();
+    expect(records).toHaveLength(1);
+    expect(records[0].tags).toEqual(['工作', '灵感']);
+  });
 });
 
 describe('createCaptureWithAttachments 纯图记录等价语义', () => {
@@ -240,10 +269,26 @@ describe('createCaptureWithAttachments', () => {
       id: number;
       document: string | null;
     }>;
+    expect(withDoc.document).toBe('{"root":{"children":[]}}');
+    expect(withoutDoc.document).toBeNull();
+
     expect(rows.find((r) => r.id === withDoc.id)?.document).toBe(
       '{"root":{"children":[]}}',
     );
     expect(rows.find((r) => r.id === withoutDoc.id)?.document).toBeNull();
+  });
+
+  it('单事务返回的 record 与 listCaptures 读回的 document 一致', () => {
+    createCaptureWithAttachments({
+      text: '图文版式',
+      document: '{"root":{"children":[{"type":"image","src":"images/in-doc.png"}]}}',
+      attachments: [{ filePath: 'images/in-doc.png', sizeBytes: 1 }],
+    });
+
+    const found = listCaptures().find((r) => r.text === '图文版式');
+    expect(found?.document).toBe(
+      '{"root":{"children":[{"type":"image","src":"images/in-doc.png"}]}}',
+    );
   });
 
   it('text 为 \'\' 且 N 图（纯图记录）可写入，imagePaths 顺序正确', () => {
@@ -262,6 +307,31 @@ describe('createCaptureWithAttachments', () => {
     expect(
       (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
     ).toBe(1);
+  });
+
+  it('tags 缺省读回 []', () => {
+    const record = createCaptureWithAttachments({ text: '图文', attachments: [] });
+
+    expect(record.tags).toEqual([]);
+  });
+
+  it('tags 传入时单事务写入，返回记录与 listCaptures 读回一致', () => {
+    const record = createCaptureWithAttachments({
+      text: '图文带标签',
+      sourceApp: null,
+      tags: ['工作', '灵感'],
+      attachments: [{ filePath: 'images/tagged.png', sizeBytes: 1 }],
+    });
+
+    expect(record.tags).toEqual(['工作', '灵感']);
+
+    const row = db
+      .prepare(`SELECT tags FROM records WHERE id = ?`)
+      .get(record.id) as { tags: string };
+    expect(row.tags).toBe('["工作","灵感"]');
+
+    const found = listCaptures().find((r) => r.id === record.id);
+    expect(found?.tags).toEqual(['工作', '灵感']);
   });
 
   it('事务性：第二个 attachment 插入失败时 records 行一并回滚（库零记录）', () => {
@@ -554,6 +624,24 @@ describe('queryCaptures', () => {
     expect(result.items.map((r) => r.sourceApp)).toEqual(['screenshot', 'screenshot']);
   });
 
+  it('queryCaptures 读回 document 列（带版式与无版式记录并存）', () => {
+    createCapture({ text: '纯文字', document: null });
+    createCaptureWithAttachments({
+      text: '混排目标',
+      document: '{"root":{"children":[]}}',
+      attachments: [{ filePath: 'images/doc.png', sizeBytes: 1 }],
+    });
+
+    const result = queryCaptures({ keyword: '目标', page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0].document).toBe('{"root":{"children":[]}}');
+
+    const all = queryCaptures({ page: 1, pageSize: 10 });
+    const textRecord = all.items.find((r) => r.text === '纯文字');
+    expect(textRecord?.document).toBeNull();
+  });
+
   it('一记录多附件聚合为有序 imagePaths 数组（attachments.id 升序）', () => {
     seedRecords();
     const recordId = insertImageWithTime('images/m-1.png', '2026-01-08T08:00:00.000Z');
@@ -592,6 +680,74 @@ describe('queryCaptures', () => {
     const images = queryCaptures({ keyword: '目标', hasImages: true, page: 1, pageSize: 10 });
     expect(images.total).toBe(0);
     expect(images.items).toEqual([]);
+  });
+
+  it('tagNames 多值任一命中 OR：tagNames 含全部标签时命中三条，单值命中两条', () => {
+    createCapture({ text: '仅工作', tags: ['工作'] });
+    createCapture({ text: '仅灵感', tags: ['灵感'] });
+    createCapture({ text: '两者都有', tags: ['工作', '灵感'] });
+
+    const all = queryCaptures({ tagNames: ['工作', '灵感'], page: 1, pageSize: 10 });
+    expect(all.total).toBe(3);
+    expect(all.items.map((r) => r.text).sort()).toEqual(['两者都有', '仅工作', '仅灵感']);
+
+    const onlyWork = queryCaptures({ tagNames: ['工作'], page: 1, pageSize: 10 });
+    expect(onlyWork.total).toBe(2);
+    expect(onlyWork.items.map((r) => r.text).sort()).toEqual(['两者都有', '仅工作']);
+  });
+
+  it('tagNames 无匹配项时 total 为 0、items 为空', () => {
+    createCapture({ text: '仅工作', tags: ['工作'] });
+    createCapture({ text: '仅灵感', tags: ['灵感'] });
+
+    const result = queryCaptures({ tagNames: ['不存在'], page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(0);
+    expect(result.items).toEqual([]);
+  });
+
+  it('tagNames 空数组或 undefined 不生效（全部返回）', () => {
+    seedRecords();
+
+    const empty = queryCaptures({ tagNames: [], page: 1, pageSize: 10 });
+    expect(empty.total).toBe(3);
+    expect(empty.items).toHaveLength(3);
+
+    const omitted = queryCaptures({ page: 1, pageSize: 10 });
+    expect(omitted.total).toBe(3);
+    expect(omitted.items).toHaveLength(3);
+  });
+
+  it('tagNames 与 keyword 组合时条件间 AND', () => {
+    createCapture({ text: '会议纪要 目标', tags: ['工作'] });
+    createCapture({ text: '随想', tags: ['工作'] });
+    createCapture({ text: '点子 目标', tags: ['灵感'] });
+
+    const result = queryCaptures({ keyword: '目标', tagNames: ['工作'], page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items.map((r) => r.text)).toEqual(['会议纪要 目标']);
+  });
+
+  it('tagNames 查询下 total 与 items 同条件（OR 命中总数）', () => {
+    createCapture({ text: '仅工作', tags: ['工作'] });
+    createCapture({ text: '仅灵感', tags: ['灵感'] });
+    createCapture({ text: '无关', tags: ['生活'] });
+
+    const result = queryCaptures({ tagNames: ['工作', '灵感'], page: 1, pageSize: 2 });
+
+    expect(result.total).toBe(2);
+    expect(result.items).toHaveLength(2);
+  });
+
+  it('tag「AI」+ 快照 ["AIGC"] 不误命中（参数带引号精确匹配）', () => {
+    createCapture({ text: 'AIGC 记录', tags: ['AIGC'] });
+    createCapture({ text: 'AI 记录', tags: ['AI'] });
+
+    const result = queryCaptures({ tagNames: ['AI'], page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items.map((r) => r.text)).toEqual(['AI 记录']);
   });
 
   it('hasImages 与 since/until 组合：条件同取交集', () => {

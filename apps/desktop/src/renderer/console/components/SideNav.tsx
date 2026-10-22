@@ -1,15 +1,15 @@
 /**
- * 后台 console 左侧导航栏（任务 14）：渲染「记录」「设置」两个导航项——
+ * 后台 console 左侧导航栏：渲染「记录」「标签」「设置」三个导航项——
  * 点击切换 App.tsx 下发的 onSelect；选中项高亮。
- * 导航结构一次成型，后续迭代只加项不改编排。
  */
 import * as React from 'react';
 import { cn } from '../../input/lib/utils';
 
-export type ConsolePage = 'records' | 'settings';
+export type ConsolePage = 'records' | 'tags' | 'settings';
 
 const NAV_ITEMS: { key: ConsolePage; label: string }[] = [
   { key: 'records', label: '记录' },
+  { key: 'tags', label: '标签' },
   { key: 'settings', label: '设置' },
 ];
 

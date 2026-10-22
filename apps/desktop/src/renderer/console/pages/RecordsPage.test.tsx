@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { QueryCapturesPayload } from '@shiguang/shared';
+import type { Tag } from '@shiguang/shared';
 import type { ShiguangApi } from '../../../preload';
 import { RecordsPage } from './RecordsPage';
 
@@ -10,9 +11,11 @@ function makeRecords(total: number) {
   return Array.from({ length: total }, (_, i) => ({
     id: i + 1,
     text: `记录 ${i + 1}`,
+    document: null,
     sourceApp: null,
     createdAt: '2024-05-01T08:30:00.000Z',
     imagePaths: [] as string[],
+    tags: [] as string[],
   }));
 }
 
@@ -50,6 +53,14 @@ function createApiMock(total: number): ShiguangApi {
     pet: {
       clicked: vi.fn(),
       onSetState: vi.fn(() => () => {}),
+    },
+    tags: {
+      list: vi.fn(() => Promise.resolve([] as Tag[])),
+      create: vi.fn(),
+      rename: vi.fn(),
+      delete: vi.fn(),
+      lastGet: vi.fn(() => Promise.resolve([] as string[])),
+      lastSet: vi.fn(),
     },
   };
 }
@@ -95,20 +106,23 @@ describe('RecordsPage 记录页', () => {
     const user = userEvent.setup();
     const api = createApiMock(25);
     window.api = api;
-    render(<RecordsPage />);
+    const { container } = render(<RecordsPage />);
 
     const row = await screen.findByText('记录 1');
     const rowContainer = row.parentElement!;
-    // 默认截断预览
-    expect(row.className).toContain('line-clamp-3');
+    // 默认截断预览（预览容器限高 max-h-40 + 渐变遮罩）
+    expect(row.closest('.max-h-40')).toBeTruthy();
+    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeTruthy();
 
-    // 点击展开：移除截断类，全量展示
+    // 点击展开：移除限高与遮罩，全量展示
     await user.click(rowContainer);
-    expect(row.className).not.toContain('line-clamp-3');
+    expect(row.closest('.max-h-40')).toBeNull();
+    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeNull();
 
     // 再次点击折叠回截断预览
     await user.click(rowContainer);
-    expect(row.className).toContain('line-clamp-3');
+    expect(row.closest('.max-h-40')).toBeTruthy();
+    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeTruthy();
   });
 
   it('输入关键词触发带 keyword 的查询，并从当前页重置回第 1 页', async () => {
@@ -123,6 +137,27 @@ describe('RecordsPage 记录页', () => {
 
     await user.type(screen.getByRole('searchbox'), '拾光');
 
+    expect(api.capture.list).toHaveBeenLastCalledWith({
+      page: 1,
+      pageSize: 20,
+      keyword: '拾光',
+    });
+  });
+
+  it('类型筛选已移除：筛选区无「类型：」segmented，payload 不含 hasImages', async () => {
+    const user = userEvent.setup();
+    const api = createApiMock(25);
+    window.api = api;
+    render(<RecordsPage />);
+
+    await screen.findAllByRole('checkbox');
+    // 记录均为图文混排形态，UI 不再渲染全部/文字/图片三选
+    expect(screen.queryByRole('button', { name: '类型：全部' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '类型：图片' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '类型：文字' })).toBeNull();
+
+    // 任意筛选操作后 payload 均不得携带 hasImages（DAO 查询能力保留但不再被页面调用）
+    await user.type(screen.getByRole('searchbox'), '拾光');
     expect(api.capture.list).toHaveBeenLastCalledWith({
       page: 1,
       pageSize: 20,
@@ -286,8 +321,8 @@ describe('RecordsPage 记录页', () => {
     const second = screen.getByText('记录 2');
     await user.click(first.parentElement!);
 
-    expect(first.className).not.toContain('line-clamp-3');
-    expect(second.className).toContain('line-clamp-3');
+    expect(first.closest('.max-h-40')).toBeNull();
+    expect(second.closest('.max-h-40')).toBeTruthy();
   });
 
   it('点击删除按钮弹出确认弹窗，取消则不删除且关闭弹窗', async () => {
@@ -580,97 +615,11 @@ describe('RecordsPage 记录页', () => {
     ).toBe('true');
   });
 
-  describe('类型筛选 segmented（任务 21）', () => {
-    it('默认高亮「全部」且首屏查询不带 hasImages 字段', async () => {
-      const api = createApiMock(1);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findAllByRole('checkbox');
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
-      expect(
-        (screen.getByRole('button', { name: '类型：全部' }) as HTMLButtonElement).getAttribute('aria-pressed')
-      ).toBe('true');
-    });
-
-    it('点「图片」触发带 hasImages:true 的查询，「文字」带 hasImages:false', async () => {
-      const user = userEvent.setup();
-      const api = createApiMock(1);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findAllByRole('checkbox');
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
-      expect(
-        (screen.getByRole('button', { name: '类型：图片' }) as HTMLButtonElement).getAttribute('aria-pressed')
-      ).toBe('true');
-
-      await user.click(screen.getByRole('button', { name: '类型：文字' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: false });
-    });
-
-    it('切回「全部」后 payload 不再带 hasImages 字段', async () => {
-      const user = userEvent.setup();
-      const api = createApiMock(1);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findAllByRole('checkbox');
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-      await user.click(screen.getByRole('button', { name: '类型：全部' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
-    });
-
-    it('切换类型从当前页重置回第 1 页重新查询', async () => {
-      const user = userEvent.setup();
-      const api = createApiMock(25);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findAllByRole('checkbox');
-      await user.click(screen.getByRole('button', { name: '下一页' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 2, pageSize: 20 });
-
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
-    });
-
-    it('类型与关键词组合时 payload 同时携带两者', async () => {
-      const user = userEvent.setup();
-      const api = createApiMock(25);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findAllByRole('checkbox');
-      await user.type(screen.getByRole('searchbox'), '拾光');
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-      expect(api.capture.list).toHaveBeenLastCalledWith({
-        page: 1,
-        pageSize: 20,
-        keyword: '拾光',
-        hasImages: true,
-      });
-    });
-
-    it('仅类型筛选生效且有筛选但无结果时显示调整筛选引导文案', async () => {
-      const user = userEvent.setup();
-      const api = createApiMock(0);
-      window.api = api;
-      render(<RecordsPage />);
-
-      await screen.findByText('还没有任何记录');
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-      expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
-      expect(screen.queryByText('还没有任何记录')).toBeNull();
-    });
-  });
-
   describe('删除确认文案（任务 22）', () => {
     /** 混合类型记录：1 无图（纯文字）、2 含图（imagePaths 非空） */
     const mixedRecords = [
-      { id: 1, text: '文字记录 1', sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[] },
-      { id: 2, text: '', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'] },
+      { id: 1, text: '文字记录 1', document: null, sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[], tags: [] as string[] },
+      { id: 2, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/a.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'], tags: [] as string[] },
     ];
 
     function createMixedApiMock(): ShiguangApi {
@@ -684,6 +633,14 @@ describe('RecordsPage 记录页', () => {
         console: { open: vi.fn() },
         input: { blur: vi.fn(), close: vi.fn() },
         pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
+        tags: {
+          list: vi.fn(() => Promise.resolve([] as Tag[])),
+          create: vi.fn(),
+          rename: vi.fn(),
+          delete: vi.fn(),
+          lastGet: vi.fn(() => Promise.resolve([] as string[])),
+          lastSet: vi.fn(),
+        },
       };
     }
 
@@ -744,86 +701,62 @@ describe('RecordsPage 记录页', () => {
   describe('图片记录混合渲染（任务 23）', () => {
     /** 混合记录：1/3 纯文字，2/4 含图（imagePaths 非空） */
     const mixedRecords = [
-      { id: 1, text: '文字记录 1', sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[] },
-      { id: 2, text: '', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'] },
-      { id: 3, text: '文字记录 3', sourceApp: null, createdAt: '2024-05-03T10:00:00.000Z', imagePaths: [] as string[] },
-      { id: 4, text: '', sourceApp: 'screenshot', createdAt: '2024-05-04T11:00:00.000Z', imagePaths: ['images/b.png'] },
+      { id: 1, text: '文字记录 1', document: null, sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[], tags: [] as string[] },
+      { id: 2, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/a.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'], tags: [] as string[] },
+      { id: 3, text: '文字记录 3', document: null, sourceApp: null, createdAt: '2024-05-03T10:00:00.000Z', imagePaths: [] as string[], tags: [] as string[] },
+      { id: 4, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/b.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-04T11:00:00.000Z', imagePaths: ['images/b.png'], tags: [] as string[] },
     ];
 
-    /**
-     * mock capture.list 在 mock 层按 payload.hasImages 过滤（与后端 queryCaptures 行为一致），
-     * 模拟真实链路「payload.hasImages → 服务端筛选 → 仅返回对应类型记录」的集成语义。
-     */
+    /** mock capture.list 恒返回混合记录（类型筛选已移除，payload 不再携带 hasImages） */
     function createMixedListApiMock(): ShiguangApi {
       return {
         capture: {
           create: vi.fn(),
-          list: vi.fn((payload: QueryCapturesPayload) => {
-            const items = payload.hasImages === true
-              ? mixedRecords.filter((r) => r.imagePaths.length > 0)
-              : payload.hasImages === false
-                ? mixedRecords.filter((r) => r.imagePaths.length === 0)
-                : mixedRecords;
-            return Promise.resolve({ items, total: items.length });
-          }),
+          list: vi.fn(() => Promise.resolve({ items: mixedRecords, total: mixedRecords.length })),
           delete: vi.fn(() => Promise.resolve()),
           copyImage: vi.fn(),
         },
         console: { open: vi.fn() },
         input: { blur: vi.fn(), close: vi.fn() },
         pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
+        tags: {
+          list: vi.fn(() => Promise.resolve([] as Tag[])),
+          create: vi.fn(),
+          rename: vi.fn(),
+          delete: vi.fn(),
+          lastGet: vi.fn(() => Promise.resolve([] as string[])),
+          lastSet: vi.fn(),
+        },
       };
     }
 
-    it('image 行与 text 行同屏渲染：文字预览与 shiguang-image:// 缩略图并存', async () => {
+    it('image 行与 text 行同屏渲染：文字预览与 shiguang-image:// 图片并存', async () => {
       const api = createMixedListApiMock();
       window.api = api;
-      render(<RecordsPage />);
+      const { container } = render(<RecordsPage />);
 
       // text 行渲染文字预览
       expect(await screen.findByText('文字记录 1')).toBeTruthy();
       expect(screen.getByText('文字记录 3')).toBeTruthy();
-      // image 行渲染协议缩略图（collapsed 态无大图）
-      expect(screen.getByAltText('截图记录 2')).toBeTruthy();
-      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
-      expect((screen.getByAltText('截图记录 2') as HTMLImageElement).src).toBe('shiguang-image://a.png');
-      expect(screen.queryByAltText('截图记录 2 大图')).toBeNull();
+      // image 行经 document 渲染协议图片（收起/展开形态一致）
+      const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
+      expect(imgs.map((i) => i.src)).toEqual([
+        'shiguang-image://a.png',
+        'shiguang-image://b.png',
+      ]);
       expect(api.capture.list).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
     });
 
-    it('类型筛选切「图片」后列表仅渲染图片行，payload 带 hasImages:true', async () => {
+    it('image 行点删除的确认框扩展文案仍由 imagePaths 驱动（与 document 渲染无关）', async () => {
+      const api = createMixedListApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
       const user = userEvent.setup();
-      const api = createMixedListApiMock();
-      window.api = api;
-      render(<RecordsPage />);
+      await user.click(screen.getByRole('button', { name: '删除记录 2' }));
 
-      await screen.findByText('文字记录 1');
-      await user.click(screen.getByRole('button', { name: '类型：图片' }));
-
-      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, hasImages: true });
-      // 仅图片行：缩略图保留、文字行消失
-      await waitFor(() => expect(screen.queryByText('文字记录 1')).toBeNull());
-      expect(screen.getByAltText('截图记录 2')).toBeTruthy();
-      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
-      expect(screen.getAllByRole('checkbox')).toHaveLength(2);
-    });
-
-    it('「图片丢失」占位在 img error 后出现，替代缩略图', async () => {
-      const api = createMixedListApiMock();
-      window.api = api;
-      render(<RecordsPage />);
-
-      const img = await screen.findByAltText('截图记录 2');
-      expect(screen.queryByText('图片丢失')).toBeNull();
-
-      // jsdom 不加载 shiguang-image:// 资源、不自发 error，手动派发 error 事件
-      fireEvent.error(img);
-
-      expect(screen.getByText('图片丢失')).toBeTruthy();
-      expect(screen.queryByAltText('截图记录 2')).toBeNull();
-      // 其他行不受影响
-      expect(screen.getByAltText('截图记录 4')).toBeTruthy();
-      expect(screen.getByText('文字记录 1')).toBeTruthy();
+      expect(screen.getByText('删除后不可恢复。将同时删除图片文件。')).toBeTruthy();
     });
   });
 
@@ -839,5 +772,101 @@ describe('RecordsPage 记录页', () => {
     expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
     expect(screen.getByText(/调整关键词或时间范围/)).toBeTruthy();
     expect(screen.queryByText('还没有任何记录')).toBeNull();
+  });
+
+  describe('标签筛选（任务 18）', () => {
+    const tagLib: Tag[] = [
+      { id: 1, name: '工作', color: '#f59e0b' },
+      { id: 2, name: '灵感', color: '#3b82f6' },
+    ];
+
+    function createTagsApiMock(total: number): ShiguangApi {
+      const api = createApiMock(total);
+      api.tags.list = vi.fn(() => Promise.resolve(tagLib));
+      return api;
+    }
+
+    it('挂载时拉取标签库（tags:list 调用一次）', async () => {
+      const api = createTagsApiMock(1);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      expect(api.tags.list).toHaveBeenCalledTimes(1);
+    });
+
+    it('TagSelect 选择两个标签 → payload 含 tagNames 两元素且 page 归 1', async () => {
+      const user = userEvent.setup();
+      const api = createTagsApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '下一页' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 2, pageSize: 20 });
+
+      // 点输入框展开下拉（blur 时序铁律：候选项 mousedown 选中，input 保持聚焦）
+      await user.click(screen.getByRole('textbox', { name: '筛选标签' }));
+      await user.click(screen.getByRole('option', { name: '工作' }));
+      await user.click(screen.getByRole('option', { name: '灵感' }));
+
+      expect(api.capture.list).toHaveBeenLastCalledWith({
+        page: 1,
+        pageSize: 20,
+        tagNames: ['工作', '灵感'],
+      });
+    });
+
+    it('移除全部标签 chips 后 payload 不再带 tagNames', async () => {
+      const user = userEvent.setup();
+      const api = createTagsApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('textbox', { name: '筛选标签' }));
+      await user.click(screen.getByRole('option', { name: '工作' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({
+        page: 1,
+        pageSize: 20,
+        tagNames: ['工作'],
+      });
+
+      await user.click(screen.getByRole('button', { name: '移除标签 工作' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
+    });
+
+    it('标签筛选与关键词组合时两条件同在 payload', async () => {
+      const user = userEvent.setup();
+      const api = createTagsApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.type(screen.getByRole('searchbox'), '拾光');
+      await user.click(screen.getByRole('textbox', { name: '筛选标签' }));
+      await user.click(screen.getByRole('option', { name: '工作' }));
+
+      expect(api.capture.list).toHaveBeenLastCalledWith({
+        page: 1,
+        pageSize: 20,
+        keyword: '拾光',
+        tagNames: ['工作'],
+      });
+    });
+
+    it('仅有标签筛选但无结果时显示调整筛选引导文案', async () => {
+      const user = userEvent.setup();
+      const api = createTagsApiMock(0);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findByText('还没有任何记录');
+      await user.click(screen.getByRole('textbox', { name: '筛选标签' }));
+      await user.click(screen.getByRole('option', { name: '工作' }));
+
+      expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
+      expect(screen.queryByText('还没有任何记录')).toBeNull();
+    });
   });
 });

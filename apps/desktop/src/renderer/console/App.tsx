@@ -7,6 +7,7 @@
 import * as React from 'react';
 import { SideNav, type ConsolePage } from './components/SideNav';
 import RecordsPage from './pages/RecordsPage';
+import TagsPage from './pages/TagsPage';
 import SettingsPage from './pages/SettingsPage';
 
 export function App() {
@@ -18,7 +19,7 @@ export function App() {
       <SideNav selected={page} onSelect={setPage} />
       {/* 右侧内容区 */}
       <main className="flex-1 overflow-y-auto">
-        {page === 'records' ? <RecordsPage /> : <SettingsPage />}
+        {page === 'records' ? <RecordsPage /> : page === 'tags' ? <TagsPage /> : <SettingsPage />}
       </main>
     </div>
   );

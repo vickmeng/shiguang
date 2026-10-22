@@ -1,39 +1,37 @@
 /**
- * 记录行（M4 任务 19）：从 RecordsPage 平移的单条记录 li 子组件——
+ * 记录行：从 RecordsPage 平移的单条记录 li 子组件——
  * 常驻复选框（阻止冒泡避免误触展开）、内容区、复制按钮、删除按钮（均阻止冒泡）；
- * 内容区按 record.imagePaths.length > 0 分流（M4 改造：imagePaths 派生自 attachments 聚合）：
- * - 纯文字行（imagePaths 恒为 []）：截断/展开全文预览（line-clamp-3 语义不变，expanded 由父级状态驱动）；
- * - 含图行：渲染 shiguang-image:// 缩略图（宽约 96px、object-contain、圆角边框）替代文字预览，
- *   多图（length > 1）时缩略块右上角叠加「共N张」角标；
- * 展开态：文字行移除截断，含图行由缩略图切换为纵向全列单图（max-w-[480px] w-full object-contain）；
- * 复制按钮：含图行调 window.api.capture.copyImage({ id })（主进程复制首图到剪贴板），
- * 纯文字行维持 navigator.clipboard.writeText，
+ * 内容区统一走 RichCapturePreview（图文统一模型）：record.document 为唯一事实来源，
+ * 忠实渲染混排版式；document 解析失败时组件内部回退 record.text。
+ * 收起态由预览组件限高 max-h-40 + 底部渐变遮罩，展开态（expanded 由父级状态驱动）
+ * 不设限高；不再有「含图/纯文字」分流、缩略图/「共N张」角标等图片特殊形态。
+ * 复制按钮分流保留：imagePaths.length > 0 走 window.api.capture.copyImage({ id })
+ * （主进程复制首图到剪贴板），纯文字行维持 navigator.clipboard.writeText，
  * 成功后均弹 toast「已复制到剪贴板」（Toaster 由父页面挂载，与 RecordsPage 同语义）。
- * 行结构自 RecordsPage 现行 li 平移，选中/展开/删除编排由父组件接线（任务 20）。
+ * 标签 chips 行挂载于时间戳 <p> 上方：record.tags 非空时渲染实心 chips
+ * （底色 = 标签色 + 名称），底色取父级下发的 tagColors（库内标签用库色），
+ * 文字色经 tagTextColor 按底色亮度自动切换；tagColors 缺失该项名（已删标签）
+ * 实心灰 #d4d4d4 + 白字。
+ * 行结构自 RecordsPage 现行 li 平移，选中/展开/删除编排由父组件接线。
  */
 import * as React from 'react';
 import type { CaptureRecord } from '@shiguang/shared';
+import { RichCapturePreview } from '../../components/rich-capture-preview';
 import { toast } from '../../components/ui/toast';
+import { tagTextColor } from '../../lib/tagTextColor';
 
 export interface RecordRowProps {
   record: CaptureRecord;
   expanded: boolean;
   selected: boolean;
+  /** 标签名 → 库内颜色的映射（父级 RecordsPage 由 tags:list 派生）；缺省/缺项时色点灰显 */
+  tagColors?: Record<string, string>;
   onToggleExpand(): void;
   onToggleSelect(): void;
   onDelete(): void;
 }
 
-/** 相对 imagePaths 项（'images/<uuid>.png'）→ 协议 URL 的 basename（协议只认 basename） */
-function imageSrc(relativePath: string): string {
-  const basename = relativePath.split('/').pop() ?? relativePath;
-  return `shiguang-image://${basename}`;
-}
-
-export function RecordRow({ record, expanded, selected, onToggleExpand, onToggleSelect, onDelete }: RecordRowProps) {
-  /** 图片加载失败（磁盘文件被删等）：渲染「图片丢失」占位，替代缩略图/大图 */
-  const [imgError, setImgError] = React.useState(false);
-
+export function RecordRow({ record, expanded, selected, tagColors, onToggleExpand, onToggleSelect, onDelete }: RecordRowProps) {
   /** 复制：含图行走主进程复制首图到剪贴板，纯文字行走浏览器剪贴板 */
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -63,52 +61,35 @@ export function RecordRow({ record, expanded, selected, onToggleExpand, onToggle
         onChange={onToggleSelect}
       />
       <div className="min-w-0 flex-1">
-        {record.imagePaths.length > 0 ? (
-          imgError ? (
-            /* 「图片丢失」占位：灰色虚线框，复制/删除按钮仍可用 */
-            <div className="flex h-24 w-24 items-center justify-center rounded-md border border-dashed border-neutral-300 text-xs text-neutral-400">
-              图片丢失
-            </div>
-          ) : expanded ? (
-            /* 纵向全列单图：展开态替代缩略图，占满内容列（上限 480px） */
-            <img
-              src={imageSrc(record.imagePaths[0])}
-              alt={`截图记录 ${record.id} 大图`}
-              className="max-w-[480px] w-full rounded-md border border-neutral-200 object-contain"
-              onError={() => setImgError(true)}
-            />
-          ) : (
-            <>
-              <div className="relative inline-block">
-                <img
-                  src={imageSrc(record.imagePaths[0])}
-                  alt={`截图记录 ${record.id}`}
-                  className="w-24 rounded-md border border-neutral-200 object-contain"
-                  onError={() => setImgError(true)}
-                />
-                {record.imagePaths.length > 1 && (
-                  /* 多图角标：缩略块右上角 */
-                  <span className="absolute right-0 top-0 rounded-tr-md rounded-bl-md bg-neutral-800/70 px-1.5 py-0.5 text-[10px] leading-none text-white">
-                    共{record.imagePaths.length}张
-                  </span>
-                )}
-              </div>
-            </>
-          )
-        ) : (
-          <p
-            className={
-              expanded
-                ? 'whitespace-pre-wrap break-words text-sm text-neutral-700'
-                : 'line-clamp-3 whitespace-pre-wrap break-words text-sm text-neutral-700'
-            }
-          >
-            {record.text}
-          </p>
-        )}
+        {/* 内容区：document 混排忠实渲染（收起/展开由 expanded 驱动） */}
+        <RichCapturePreview
+          document={record.document}
+          text={record.text}
+          expanded={expanded}
+        />
         <p className="mt-1 text-xs text-neutral-400">
           {new Date(record.createdAt).toLocaleString()}
         </p>
+        {record.tags.length > 0 && (
+          /* 实心标签 chips：时间戳上方；库内标签取库色（文字随亮度），已删标签灰底白字 */
+          <div className="mt-1 flex flex-wrap gap-1">
+            {record.tags.map((name) => {
+              const bg = tagColors?.[name] ?? '#d4d4d4';
+              return (
+                <span
+                  key={name}
+                  className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                  style={{
+                    backgroundColor: bg,
+                    color: tagColors?.[name] ? tagTextColor(bg) : '#ffffff',
+                  }}
+                >
+                  {name}
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
       {/* 复制按钮：阻止冒泡避免误触展开 */}
       <button

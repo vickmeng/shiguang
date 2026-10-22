@@ -79,9 +79,11 @@ function record(partial: Partial<CaptureRecord>): CaptureRecord {
   return {
     id: 1,
     text: '',
+    document: null,
     sourceApp: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     imagePaths: [],
+    tags: [],
     ...partial,
   };
 }
@@ -110,6 +112,7 @@ describe('capture:create', () => {
       { filePath: 'images/b.png', sizeBytes: 2 },
     ];
     vi.mocked(writeImageFiles).mockResolvedValue(written);
+    const tags = ['工作', '灵感'];
     const payload: CreateCapturePayload = {
       text: '图文混排',
       document: null,
@@ -117,6 +120,7 @@ describe('capture:create', () => {
         { data: dataA, sizeBytes: 3 },
         { data: dataB, sizeBytes: 2 },
       ],
+      tags,
     };
 
     await invokeCreate(payload);
@@ -129,10 +133,72 @@ describe('capture:create', () => {
       document: null,
       sourceApp: null,
       attachments: written,
+      tags,
     });
     expect(vi.mocked(writeImageFiles).mock.invocationCallOrder[0]).toBeLessThan(
       stubs.createCaptureWithAttachments.mock.invocationCallOrder[0],
     );
+  });
+
+  it('document 含 2 个 blob: image 节点：按序重写为 written 相对路径，段落文本不变', async () => {
+    const written = [
+      { filePath: 'images/a.png', sizeBytes: 3 },
+      { filePath: 'images/b.png', sizeBytes: 2 },
+    ];
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    const document = JSON.stringify({
+      root: {
+        children: [
+          { type: 'image', src: 'blob:mock-1', altText: '图一' },
+          { type: 'paragraph', children: [{ type: 'text', text: '中间段落' }] },
+          { type: 'image', src: 'blob:mock-2', altText: '图二' },
+        ],
+      },
+    });
+    const payload: CreateCapturePayload = {
+      text: '图文混排',
+      document,
+      images: [
+        { data: new Uint8Array([1]), sizeBytes: 3 },
+        { data: new Uint8Array([2]), sizeBytes: 2 },
+      ],
+    };
+
+    await invokeCreate(payload);
+
+    const arg = stubs.createCaptureWithAttachments.mock.calls[0][0] as {
+      document: string;
+    };
+    const parsed = JSON.parse(arg.document);
+    expect(parsed.root.children[0].src).toBe('images/a.png');
+    expect(parsed.root.children[2].src).toBe('images/b.png');
+    expect(parsed.root.children[1].children[0].text).toBe('中间段落');
+  });
+
+  it('document 中 image 节点数超出 written 长度：超出部分保持原值', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue([{ filePath: 'images/a.png', sizeBytes: 1 }]);
+    const document = JSON.stringify({
+      root: {
+        children: [
+          { type: 'image', src: 'blob:mock-1' },
+          { type: 'image', src: 'blob:mock-2' },
+        ],
+      },
+    });
+    const payload: CreateCapturePayload = {
+      text: 'x',
+      document,
+      images: [{ data: new Uint8Array([1]), sizeBytes: 1 }],
+    };
+
+    await invokeCreate(payload);
+
+    const arg = stubs.createCaptureWithAttachments.mock.calls[0][0] as {
+      document: string;
+    };
+    const parsed = JSON.parse(arg.document);
+    expect(parsed.root.children[0].src).toBe('images/a.png');
+    expect(parsed.root.children[1].src).toBe('blob:mock-2');
   });
 
   it('payload 带 document 字符串：原样转发进 createCaptureWithAttachments 的 document', async () => {
@@ -162,6 +228,17 @@ describe('capture:create', () => {
 
     expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
       expect.objectContaining({ document: null }),
+    );
+  });
+
+  it('payload 不带 tags 字段：tags 以 undefined 透传（DAO 侧归一入库 [])', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue([]);
+    const payload: CreateCapturePayload = { text: '纯文字', images: [] };
+
+    await invokeCreate(payload);
+
+    expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ tags: undefined }),
     );
   });
 

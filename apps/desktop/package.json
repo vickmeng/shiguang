@@ -14,6 +14,7 @@
     "pack:mac": "electron-vite build && electron-builder --mac"
   },
   "dependencies": {
+    "@lexical/html": "^0.52.0",
     "@lexical/react": "^0.52.0",
     "@shiguang/ai": "workspace:*",
     "@shiguang/shared": "workspace:*",

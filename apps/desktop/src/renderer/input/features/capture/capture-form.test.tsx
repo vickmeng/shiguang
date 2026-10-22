@@ -40,6 +40,14 @@ function createApiMock() {
       delete: vi.fn(),
       copyImage: vi.fn(),
     },
+    tags: {
+      list: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+      rename: vi.fn(),
+      delete: vi.fn(),
+      lastGet: vi.fn().mockResolvedValue([]),
+      lastSet: vi.fn().mockResolvedValue(undefined),
+    },
     console: {
       open: vi.fn(),
     },
@@ -131,6 +139,11 @@ function makeImageFileStub(bytes: Uint8Array): File {
   } as unknown as File;
 }
 
+/** TagSelect 的 filter input 同为 textbox 角色，编辑器 DOM 用 Lexical 标记唯一定位 */
+function editorElement(): HTMLElement {
+  return document.querySelector('[data-lexical-editor="true"]') as HTMLElement;
+}
+
 /** 捕获 Blob 构造入参（jsdom Blob 无 arrayBuffer，读回字节须拦截构造） */
 function captureBlobParts(): { parts: BlobPart[][] } {
   const captured: BlobPart[][] = [];
@@ -172,7 +185,7 @@ describe('CaptureForm（Lexical 形态）', () => {
 
     // jsdom 未实现 contentEditable IDL 属性，断言 contenteditable 属性值
     // （placeholder 与字数统计展示已于 2026-10-20 按产品决策移除，无相关断言）
-    expect(screen.getByRole('textbox').getAttribute('contenteditable')).toBe('true');
+    expect(editorElement().getAttribute('contenteditable')).toBe('true');
   });
 
   // jsdom 的 InputEvent 无 getTargetRanges()，Lexical 在 jsdom 不注册 beforeinput
@@ -372,7 +385,7 @@ describe('CaptureForm（Lexical 形态）', () => {
     window.api = createApiMock();
     render(<CaptureForm />);
 
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    fireEvent.keyDown(editorElement(), { key: 'Escape' });
     expect(window.api.input.close).toHaveBeenCalledTimes(1);
   });
 });
@@ -401,7 +414,7 @@ describe('CaptureForm 粘贴分流（任务 17：PASTE_COMMAND）', () => {
     const { parts } = captureBlobParts();
 
     await act(async () => {
-      dispatchPaste(screen.getByRole('textbox'), makeClipboardData({ files: [makeImageFileStub(pngBytes)] }));
+      dispatchPaste(editorElement(), makeClipboardData({ files: [makeImageFileStub(pngBytes)] }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -433,7 +446,7 @@ describe('CaptureForm 粘贴分流（任务 17：PASTE_COMMAND）', () => {
 
     await act(async () => {
       dispatchPaste(
-        screen.getByRole('textbox'),
+        editorElement(),
         makeClipboardData({ files: [new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })] }),
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -475,7 +488,7 @@ describe('CaptureForm 粘贴分流（任务 17：PASTE_COMMAND）', () => {
     });
 
     await act(async () => {
-      screen.getByRole('textbox').dispatchEvent(event);
+      editorElement().dispatchEvent(event);
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -503,7 +516,7 @@ describe('CaptureForm 提交编排（任务 18：图文 payload 与清空/revoke
   async function pasteImage(bytes: Uint8Array) {
     await act(async () => {
       dispatchPaste(
-        screen.getByRole('textbox'),
+        editorElement(),
         makeClipboardData({ files: [makeImageFileStub(bytes)] }),
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -664,5 +677,146 @@ describe('CaptureForm 提交编排（任务 18：图文 payload 与清空/revoke
 
     unmount();
     expect(revoke).toHaveBeenCalledWith('blob:mock-1');
+  });
+});
+
+describe('CaptureForm 标签接入（任务 13：TagSelect + 记忆回填/lastSet）', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('标签栏独立于编辑器边框容器：独立元数据栏位于编辑器卡片上方', async () => {
+    window.api = createApiMock();
+    render(<CaptureForm />);
+
+    const tagInput = screen.getByRole('textbox', { name: '标签' });
+    // 向上找独立标签栏容器（rounded-md border + bg-neutral-50 元数据栏）
+    let tagBar: HTMLElement | null = tagInput;
+    while (tagBar && !tagBar.className.includes('bg-neutral-50')) {
+      tagBar = tagBar.parentElement;
+    }
+    expect(tagBar).not.toBeNull();
+    expect(tagBar!.className).toContain('rounded-md');
+    const editor = editorElement();
+    // 标签栏不包裹编辑器（TagSelect 已移出编辑器边框容器）
+    expect(tagBar!.contains(editor)).toBe(false);
+    // DOM 顺序：标签栏在编辑器卡片之前（自上而下：标签栏 → 编辑器卡片）
+    expect(
+      tagBar!.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('挂载后 tags.list 与 tags.lastGet 各调用一次，预选 chips 渲染（库外名称灰显 chip 仍在）', async () => {
+    const api = createApiMock();
+    api.tags.list = vi.fn().mockResolvedValue([
+      { id: 1, name: '工作', color: '#f59e0b' },
+    ]) as unknown as ShiguangApi['tags']['list'];
+    api.tags.lastGet = vi
+      .fn()
+      .mockResolvedValue(['工作', '记忆X']) as unknown as ShiguangApi['tags']['lastGet'];
+    window.api = api;
+    renderInner();
+
+    await vi.waitFor(() => {
+      expect(api.tags.list).toHaveBeenCalledTimes(1);
+      expect(api.tags.lastGet).toHaveBeenCalledTimes(1);
+    });
+    // 库内名称与库外记忆名称均渲染为 chips（库外灰显 #d4d4d4，chip 仍在）
+    expect(await screen.findByText('工作')).toBeTruthy();
+    expect(await screen.findByText('记忆X')).toBeTruthy();
+    const chips = screen.getAllByRole('button', { name: /移除标签/ });
+    expect(chips.length).toBe(2);
+  });
+
+  it('提交 invoke payload 含 tags 数组（与预选一致）与编辑器内容', async () => {
+    const api = createApiMock();
+    api.tags.lastGet = vi
+      .fn()
+      .mockResolvedValue(['预选']) as unknown as ShiguangApi['tags']['lastGet'];
+    window.api = api;
+    const editorRef = renderInner();
+    const editor = editorRef.current!;
+
+    await vi.waitFor(() => expect(api.tags.lastGet).toHaveBeenCalledTimes(1));
+    setEditorText(editor, 'tagged');
+    fireEvent.click(screen.getByRole('button', { name: /拾光/ }));
+
+    const payload = vi.mocked(api.capture.create).mock.calls[0][0];
+    expect(payload.text).toBe('tagged');
+    expect(payload.tags).toEqual(['预选']);
+  });
+
+  it('成功后 tags.lastSet 以同数组被调且 chips 仍保留（不清空预选）', async () => {
+    const api = createApiMock();
+    api.tags.lastGet = vi
+      .fn()
+      .mockResolvedValue(['预选']) as unknown as ShiguangApi['tags']['lastGet'];
+    window.api = api;
+    const editorRef = renderInner();
+    const editor = editorRef.current!;
+
+    await vi.waitFor(() => expect(api.tags.lastGet).toHaveBeenCalledTimes(1));
+    setEditorText(editor, 'memo');
+    fireEvent.click(screen.getByRole('button', { name: /拾光/ }));
+
+    expect(await screen.findByText('✓ 已拾光')).toBeTruthy();
+    // lastSet 在成功闪现定时器内触发（600ms 后）
+    await vi.waitFor(
+      () => {
+        expect(api.tags.lastSet).toHaveBeenCalledWith({ names: ['预选'] });
+      },
+      { timeout: 3000, interval: 50 },
+    );
+    // 成功路径不清空 selectedTags：chip 仍渲染
+    expect(screen.getByText('预选')).toBeTruthy();
+
+    await vi.waitFor(
+      () => {
+        expect(editorText(editor)).toBe('');
+      },
+      { timeout: 3000, interval: 50 },
+    );
+    // 编辑器已清空但 chips 依旧
+    expect(screen.getByText('预选')).toBeTruthy();
+  });
+
+  it('tags.lastGet reject（降级）→ 组件正常渲染无预选 chips', async () => {
+    const api = createApiMock();
+    api.tags.lastGet = vi
+      .fn()
+      .mockRejectedValue(new Error('io error')) as unknown as ShiguangApi['tags']['lastGet'];
+    window.api = api;
+    renderInner();
+
+    // 记忆读取失败不影响表单主体可用
+    await vi.waitFor(() => expect(api.tags.lastGet).toHaveBeenCalledTimes(1));
+    expect(editorElement().getAttribute('contenteditable')).toBe('true');
+    expect(screen.queryByRole('button', { name: /移除标签/ })).toBeNull();
+  });
+
+  it('capture.create reject → chips 与 tagLib 保留（失败路径标签状态不动）', async () => {
+    const api = createApiMock();
+    api.tags.list = vi.fn().mockResolvedValue([
+      { id: 1, name: '工作', color: '#f59e0b' },
+    ]) as unknown as ShiguangApi['tags']['list'];
+    api.tags.lastGet = vi
+      .fn()
+      .mockResolvedValue(['工作']) as unknown as ShiguangApi['tags']['lastGet'];
+    api.capture.create = vi
+      .fn()
+      .mockRejectedValue(new Error('db busy')) as unknown as ShiguangApi['capture']['create'];
+    window.api = api;
+    const editorRef = renderInner();
+    const editor = editorRef.current!;
+
+    await vi.waitFor(() => expect(api.tags.lastGet).toHaveBeenCalledTimes(1));
+    setEditorText(editor, 'retry tag');
+    fireEvent.click(screen.getByRole('button', { name: /拾光/ }));
+
+    expect(await screen.findByText('提交失败')).toBeTruthy();
+    // 失败路径：预选 chips 与标签库结果均保留（未触发 lastSet 记忆）
+    expect(screen.getByText('工作')).toBeTruthy();
+    expect(api.tags.lastSet).not.toHaveBeenCalled();
   });
 });

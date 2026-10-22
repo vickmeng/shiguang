@@ -5,11 +5,13 @@
  * - 照 Lexical 官方 playground ImageNode 精简为 DecoratorNode，仅承载图片地址；
  * - decorate 渲染行内 <img src={...}>；粘贴字节由 capture-form 的 imageBytesRef
  *   以节点 key 关联管理（本节点不持有字节）；
- * - importJSON / exportJSON 仅读写 { src }，序列化形状由 SerializedImageNode 校验。
+ * - importJSON / exportJSON 仅读写 { src }，序列化形状由 SerializedImageNode 校验；
+ * - exportDOM 按 Lexical 官方 prescribed 做法显式导出 <img>：装饰节点 decorate()
+ *   渲染的 JSX 不进导出 HTML，@lexical/html 序列化（RichCapturePreview）依赖此方法。
  */
 import type { JSX } from 'react';
 import { createElement } from 'react';
-import type { NodeKey, SerializedLexicalNode, Spread } from 'lexical';
+import type { DOMExportOutput, NodeKey, SerializedLexicalNode, Spread } from 'lexical';
 import { DecoratorNode, LexicalNode } from 'lexical';
 
 export type SerializedImageNode = Spread<{ src: string }, SerializedLexicalNode>;
@@ -51,6 +53,12 @@ export class ImageNode extends DecoratorNode<JSX.Element> {
 
   exportJSON(): SerializedImageNode {
     return { ...super.exportJSON(), src: this.__src };
+  }
+
+  exportDOM(): DOMExportOutput {
+    const img = document.createElement('img');
+    img.src = this.getLatest().getSrc();
+    return { element: img };
   }
 
   getSrc(): string {

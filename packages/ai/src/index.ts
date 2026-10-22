@@ -13,4 +13,5 @@ export {
   queryCaptures,
   deleteCaptures,
 } from './dao/captureDao';
+export { setTagDatabase, listTags, createTag, renameTag, deleteTag } from './dao/tagDao';
 export type { CaptureRecord } from '@shiguang/shared';
