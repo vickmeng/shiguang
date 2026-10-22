@@ -16,5 +16,5 @@
 - [ ] 托盘图标为内嵌占位 PNG，需替换正式应用图标
 - [ ] shadcn primitives 为自写版，未接 radix slot（组件语义化/可访问性后续按需要升级）
 - [ ] 删除图片记录文件清理失败产生孤儿文件，无重试/扫描，随 M9 存储治理设计
-- [ ] electron-snapora 单人维护、0 star 0 fork、npm 包龄约 2 个月，生态成熟度低（缓解：锁版本 ^1.0.25 + 源码深读验证窗口策略/权限处理；回退路：自研遮罩 desktopCapturer + 自写选区窗）
-- [ ] snapora macOS 签名打包验证未做（代码/单测齐，signed hardware validation pending，需真机签名环境走查）；今日实测补充：dev 态授权归启动器（Zed），签名打包后授权身份变为「拾光」本体，需重新授权一次；macOS 26 屏幕录制授权每周重新确认，走查时需按周预期确认框
+- [x] ~~electron-snapora 单人维护、0 star 0 fork、npm 包龄约 2 个月，生态成熟度低~~ 已随截图功能整体删除（REQ-CAP-03 废弃）连带清偿：卸载依赖、移除全部装配代码，拾光零屏幕录制权限依赖
+- [x] ~~snapora macOS 签名打包验证未做~~ 已无效：截图功能删除，不再有签名验证依赖
