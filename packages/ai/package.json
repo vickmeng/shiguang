@@ -2,7 +2,7 @@
   "name": "@shiguang/ai",
   "version": "0.1.0",
   "private": true,
-  "description": "拾光智能层：LangGraph 分析流水线 + SQLite 数据访问层",
+  "description": "拾光智能层：Mastra 分析编排 + SQLite 数据访问层",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -19,9 +19,6 @@
     "postinstall": "node -e \"const path=require('path');const paths=[process.cwd(),path.resolve(process.cwd(),'..'),path.resolve(process.cwd(),'../..'),path.resolve(process.cwd(),'../../apps/desktop')];let v=null;for(const p of paths){try{v=require(require.resolve('electron/package.json',{paths:[p]})).version;break}catch(e){}}if(!v){console.log('[@shiguang/ai] electron not found, skip better-sqlite3 ABI rebuild');process.exit(0)}require('child_process').execSync('electron-rebuild -v '+v+' -f -w better-sqlite3',{stdio:'inherit'})\""
   },
   "dependencies": {
-    "@langchain/core": "^0.3.0",
-    "@langchain/langgraph": "^0.2.0",
-    "@langchain/openai": "^0.3.0",
     "@shiguang/shared": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "sqlite-vec": "^0.1.0",
