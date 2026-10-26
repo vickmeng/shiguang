@@ -5,6 +5,7 @@ import { migration as attachmentMigration } from './migrations/0002_attachment';
 import { migration as dropTypeMigration } from './migrations/0003_drop_type';
 import { migration as tagsMigration } from './migrations/0004_tags';
 import { migration as analysesMigration } from './migrations/0005_analyses';
+import { migration as analysesGradeMigration } from './migrations/0006_analyses_grade';
 
 /**
  * 已执行迁移记录表（design.md 3.2 节：storage 自定义为 SQLite 表记录已执行迁移，
@@ -66,6 +67,7 @@ const migrations: RunnableMigration<Database.Database>[] = [
   dropTypeMigration,
   tagsMigration,
   analysesMigration,
+  analysesGradeMigration,
 ];
 
 /**

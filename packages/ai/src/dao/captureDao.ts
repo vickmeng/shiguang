@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type {
   CaptureRecord,
+  Grade,
   QueryCapturesPayload,
   QueryCapturesResult,
 } from '@shiguang/shared';
@@ -13,7 +14,7 @@ import type {
  *
  * 读取侧（listCaptures / queryCaptures / getById）共用 SELECT_RECORDS_JOIN 模板：
  * records 行 + LEFT JOIN attachments（1:N，JS 侧聚合为有序 imagePaths）与
- * LEFT JOIN analyses（record_id 主键 1:1，读回 aiSummary，无行膨胀）。
+ * LEFT JOIN analyses（record_id 主键 1:1，读回 aiSummary 与 aiGrade，无行膨胀）。
  */
 let db: Database.Database | null = null;
 
@@ -33,6 +34,8 @@ interface RecordRow {
   image_path: string | null;
   /** LEFT JOIN analyses 得到的 AI 一句话摘要，无摘要记录为 null */
   ai_summary: string | null;
+  /** LEFT JOIN analyses 得到的 AI 分级，grade 为 NULL 时为 null */
+  ai_grade: string | null;
 }
 
 /**
@@ -41,7 +44,7 @@ interface RecordRow {
  * 为 1:N，多附件记录展开为多行，由 toRecords 按 record_id 聚合。
  */
 const SELECT_RECORDS_JOIN = `
-  SELECT records.*, attachments.file_path AS image_path, analyses.summary AS ai_summary
+  SELECT records.*, attachments.file_path AS image_path, analyses.summary AS ai_summary, analyses.grade AS ai_grade
   FROM records
   LEFT JOIN attachments ON attachments.record_id = records.id
   LEFT JOIN analyses ON analyses.record_id = records.id
@@ -87,6 +90,7 @@ function toRecord(row: RecordRow): CaptureRecord {
     createdAt: row.created_at,
     imagePaths: row.image_path === null ? [] : [row.image_path],
     aiSummary: row.ai_summary,
+    aiGrade: (row.ai_grade as Grade | null) ?? null,
   };
 }
 
@@ -129,7 +133,7 @@ export function createCapture(
     .prepare(
       `INSERT INTO records (text, document, source_app, tags, created_at)
        VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       RETURNING *, NULL AS image_path, NULL AS ai_summary`,
+       RETURNING *, NULL AS image_path, NULL AS ai_summary, NULL AS ai_grade`,
     )
     .get(
       input.text,
@@ -151,7 +155,8 @@ export function createCapture(
  * 任一步失败整体回滚，保证三表一致。
  *
  * @param input 记录内容（document/sourceApp 缺省为 null；tags 缺省 = 不打标；
- *   attachments 无图时传 []；analysis 缺省 = 不写 analyses 行）
+ *   attachments 无图时传 []；analysis 缺省 = 不写 analyses 行；
+ *   analysis.grade 缺省/null 存 NULL，不阻塞入库）
  * @returns 已入库的记录（imagePaths 由 input.attachments 的 filePath 顺序组装）
  */
 export function createCaptureWithAttachments(input: {
@@ -160,7 +165,7 @@ export function createCaptureWithAttachments(input: {
   sourceApp?: string | null;
   tags?: string[];
   attachments: Array<{ filePath: string; sizeBytes?: number }>;
-  analysis?: { summary: string; model: string };
+  analysis?: { summary: string; model: string; grade?: Grade | null };
 }): CaptureRecord {
   const database = db;
   if (!database) {
@@ -179,7 +184,7 @@ export function createCaptureWithAttachments(input: {
         input.document ?? null,
         input.sourceApp ?? null,
         JSON.stringify(input.tags ?? []),
-      ) as unknown as Omit<RecordRow, 'image_path' | 'ai_summary'>;
+      ) as unknown as Omit<RecordRow, 'image_path' | 'ai_summary' | 'ai_grade'>;
 
     const insertAttachment = database.prepare(
       `INSERT INTO attachments (record_id, file_path, size_bytes, created_at)
@@ -192,12 +197,17 @@ export function createCaptureWithAttachments(input: {
     if (input.analysis) {
       database
         .prepare(
-          `INSERT INTO analyses (record_id, summary, model) VALUES (?, ?, ?)`,
+          `INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, ?, ?)`,
         )
-        .run(row.id, input.analysis.summary, input.analysis.model);
+        .run(
+          row.id,
+          input.analysis.summary,
+          input.analysis.model,
+          input.analysis.grade ?? null,
+        );
     }
 
-    const record = toRecord({ ...row, image_path: null, ai_summary: null });
+    const record = toRecord({ ...row, image_path: null, ai_summary: null, ai_grade: null });
     record.tags = input.tags ?? [];
     record.imagePaths = input.attachments.map((attachment) => attachment.filePath);
     return record;
@@ -244,7 +254,8 @@ export function listCaptures(limit?: number): CaptureRecord[] {
  * until 走 created_at <= ?（含该秒），hasImages 走 EXISTS / NOT EXISTS
  *（true=仅含图，false=仅无图，缺省=全部），四者可任意组合（created_at 为 ISO
  * 字符串，字典序即时间序），均按是否传入动态拼接 WHERE。total 与 items 共用同一
- * 组条件，保证分页页数计算与当页数据一致。items 经 LEFT JOIN attachments 返回，
+ * 组条件，保证分页页数计算与当页数据一致。grade 走 analyses 子查询单值过滤，
+ * 仅匹配非 NULL 分级记录（grade 缺省 = 全部）。items 经 LEFT JOIN attachments 返回，
  * 在 JS 侧按 record_id 聚合为有序 imagePaths。
  *
  * @param input 分页筛选载荷（page 从 1 起算）
@@ -291,6 +302,12 @@ export function queryCaptures(
       '(' + quoted.map(() => `records.tags LIKE '%' || ? || '%'`).join(' OR ') + ')',
     );
     params.push(...quoted);
+  }
+  if (input.grade !== undefined) {
+    // 子查询形态：grade = ? 天然不匹配 NULL，仅命中分级记录；
+    // total COUNT 与 items JOIN 共用同一 conditions/params
+    conditions.push('records.id IN (SELECT record_id FROM analyses WHERE grade = ?)');
+    params.push(input.grade);
   }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
 

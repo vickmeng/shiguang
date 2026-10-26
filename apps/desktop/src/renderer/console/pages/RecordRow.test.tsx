@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { CaptureRecord } from '@shiguang/shared';
+import type { CaptureRecord, Grade } from '@shiguang/shared';
 import type { ShiguangApi } from '../../../preload';
 import { Toaster } from '../../components/ui/toast';
 import { RecordRow } from './RecordRow';
@@ -17,6 +17,7 @@ function makeTextRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
     imagePaths: [],
     tags: [],
     aiSummary: null,
+    aiGrade: null,
     ...overrides,
   };
 }
@@ -39,6 +40,7 @@ function makeImageRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord 
     imagePaths: ['images/abc-uuid.png'],
     tags: [],
     aiSummary: null,
+    aiGrade: null,
     ...overrides,
   };
 }
@@ -52,79 +54,134 @@ function createApiMock(): ShiguangApi {
 }
 
 function renderRow(props: Partial<Parameters<typeof RecordRow>[0]> = {}) {
-  const onToggleExpand = vi.fn();
   const onToggleSelect = vi.fn();
+  const onOpenDetail = vi.fn();
   const onDelete = vi.fn();
   const { container } = render(
     <>
-      <RecordRow
-        record={makeTextRecord()}
-        expanded={false}
-        selected={false}
-        onToggleExpand={onToggleExpand}
-        onToggleSelect={onToggleSelect}
-        onDelete={onDelete}
-        {...props}
-      />
+      <table>
+        <tbody>
+          <RecordRow
+            record={makeTextRecord()}
+            selected={false}
+            onToggleSelect={onToggleSelect}
+            onOpenDetail={onOpenDetail}
+            onDelete={onDelete}
+            {...props}
+          />
+        </tbody>
+      </table>
       <Toaster />
     </>
   );
-  return { container, onToggleExpand, onToggleSelect, onDelete };
+  return { container, onToggleSelect, onOpenDetail, onDelete };
 }
 
-describe('RecordRow 记录行', () => {
+describe('RecordRow 记录表格行', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
   });
 
-  it('纯文字行渲染文字预览：收起态限高 max-h-40，展开态移除限高', () => {
-    const { container } = render(
-      <>
-        <RecordRow
-          record={makeTextRecord()}
-          expanded={false}
-          selected={false}
-          onToggleExpand={vi.fn()}
-          onToggleSelect={vi.fn()}
-          onDelete={vi.fn()}
-        />
-      </>,
-    );
-    expect(screen.getByText('一条文字记录')).toBeTruthy();
-    expect(container.querySelector('.max-h-40')).toBeTruthy();
-    expect(container.querySelector('.bg-gradient-to-t')).toBeTruthy();
+  it('渲染根为 tr 且恰含六个 td，列序为 复选框/时间/摘要/级别/标签/操作', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({
+        aiSummary: '这是一句摘要',
+        aiGrade: 'high',
+        tags: ['工作'],
+      }),
+      tagColors: { 工作: '#f59e0b' },
+    });
 
-    cleanup();
-    const { container: expandedContainer } = render(
-      <>
-        <RecordRow
-          record={makeTextRecord()}
-          expanded
-          selected={false}
-          onToggleExpand={vi.fn()}
-          onToggleSelect={vi.fn()}
-          onDelete={vi.fn()}
-        />
-      </>,
-    );
-    expect(screen.getByText('一条文字记录')).toBeTruthy();
-    expect(expandedContainer.querySelector('.max-h-40')).toBeNull();
-    expect(expandedContainer.querySelector('.bg-gradient-to-t')).toBeNull();
+    expect(container.querySelector('tr')).toBeTruthy();
+    const tds = container.querySelectorAll('td');
+    expect(tds.length).toBe(6);
+
+    // textContent 列序断言：复选框(空) → 时间 → 摘要 → 级别 → 标签 → 操作
+    const texts = Array.from(tds).map((td) => td.textContent ?? '');
+    expect(texts[0]).toBe('');
+    expect(texts[1]).toContain('2024');
+    expect(texts[2]).toContain('这是一句摘要');
+    expect(texts[3]).toContain('高');
+    expect(texts[4]).toContain('工作');
+    expect(texts[5]).toContain('复制');
+    expect(texts[5]).toContain('删除');
   });
 
-  it('图文行经 RichCapturePreview 渲染段落 + shiguang-image:// 图片（相对路径 basename），收起/展开形态一致', () => {
+  it('行内不渲染内容预览（无 RichCapturePreview 图文全文）', () => {
     const { container } = renderRow({ record: makeImageRecord() });
-    expect(screen.getByText('图文记录说明')).toBeTruthy();
-    const img = container.querySelector('img') as HTMLImageElement;
-    expect(img.src).toBe('shiguang-image://abc-uuid.png');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.textContent).not.toContain('图文记录说明');
+  });
 
+  it('aiSummary 非空时摘要 button 点击触发 onOpenDetail', async () => {
+    const user = userEvent.setup();
+    const handlers = renderRow({
+      record: makeTextRecord({ aiSummary: '这是一句摘要' }),
+    });
+    await user.click(screen.getByRole('button', { name: '这是一句摘要' }));
+    expect(handlers.onOpenDetail).toHaveBeenCalledTimes(1);
+    expect(handlers.onToggleSelect).not.toHaveBeenCalled();
+  });
+
+  it('aiSummary 为 null/undefined 时渲染「—」占位且无 button', () => {
+    const { container: nullContainer } = renderRow({
+      record: makeTextRecord({ aiSummary: null }),
+    });
+    expect(nullContainer.textContent).toContain('—');
+    expect(nullContainer.querySelector('td:nth-child(3) button')).toBeNull();
     cleanup();
-    renderRow({ record: makeImageRecord(), expanded: true });
-    expect(screen.getByText('图文记录说明')).toBeTruthy();
-    expect(document.querySelector('img')!.getAttribute('src')).toBe(
-      'shiguang-image://abc-uuid.png',
-    );
+
+    const { aiSummary: _omit, ...withoutSummary } = makeImageRecord();
+    void _omit;
+    const { container: undefContainer } = renderRow({ record: withoutSummary });
+    expect(undefContainer.textContent).toContain('—');
+    expect(undefContainer.querySelector('td:nth-child(3) button')).toBeNull();
+  });
+
+  it('aiGrade 各分支渲染徽标类名与文案：high→bg-red-50「高」', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({ aiGrade: 'high' as Grade }),
+    });
+    const badge = container.querySelector('td:nth-child(4) span') as HTMLElement;
+    expect(badge.textContent).toBe('高');
+    expect(badge.className).toContain('bg-red-50');
+    expect(badge.className).toContain('text-red-600');
+  });
+
+  it('aiGrade 为 mid 渲染 bg-neutral-100「中」', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({ aiGrade: 'mid' as Grade }),
+    });
+    const badge = container.querySelector('td:nth-child(4) span') as HTMLElement;
+    expect(badge.textContent).toBe('中');
+    expect(badge.className).toContain('bg-neutral-100');
+    expect(badge.className).toContain('text-neutral-600');
+  });
+
+  it('aiGrade 为 low 渲染 border-neutral-200「低」', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({ aiGrade: 'low' as Grade }),
+    });
+    const badge = container.querySelector('td:nth-child(4) span') as HTMLElement;
+    expect(badge.textContent).toBe('低');
+    expect(badge.className).toContain('bg-transparent');
+    expect(badge.className).toContain('border');
+    expect(badge.className).toContain('border-neutral-200');
+    expect(badge.className).toContain('text-neutral-400');
+  });
+
+  it('aiGrade 为 null/undefined 时级别 td 留空', () => {
+    const { container: nullContainer } = renderRow({
+      record: makeTextRecord({ aiGrade: null }),
+    });
+    expect(nullContainer.querySelector('td:nth-child(4) span')).toBeNull();
+    cleanup();
+
+    const { aiGrade: _omit, ...withoutGrade } = makeImageRecord();
+    void _omit;
+    const { container: undefContainer } = renderRow({ record: withoutGrade });
+    expect(undefContainer.querySelector('td:nth-child(4) span')).toBeNull();
   });
 
   it('含图行点复制调 capture.copyImage({ id }) 并弹 toast，不走 clipboard.writeText', async () => {
@@ -163,23 +220,15 @@ describe('RecordRow 记录行', () => {
     expect(await screen.findByText('已复制到剪贴板')).toBeTruthy();
   });
 
-  it('点击行触发 onToggleExpand，点击复选框/复制/删除均阻止冒泡', async () => {
+  it('复选框 onChange 触发 onToggleSelect，删除按钮触发 onDelete', async () => {
     const user = userEvent.setup();
     const handlers = renderRow();
 
-    await user.click(screen.getByText('一条文字记录'));
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(1);
-
     await user.click(screen.getByRole('checkbox', { name: '选择记录 1' }));
     expect(handlers.onToggleSelect).toHaveBeenCalledTimes(1);
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(1);
-
-    await user.click(screen.getByRole('button', { name: '复制记录 1' }));
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole('button', { name: '删除记录 1' }));
     expect(handlers.onDelete).toHaveBeenCalledTimes(1);
-    expect(handlers.onToggleExpand).toHaveBeenCalledTimes(1);
   });
 
   it('record.tags 渲染实心 chips：底色取 tagColors 命中值，文字色随底色亮度切换', () => {
@@ -208,7 +257,7 @@ describe('RecordRow 记录行', () => {
     expect(chip.style.color).toBe('rgb(255, 255, 255)');
   });
 
-  it('tags: [] 不渲染 chips 行', () => {
+  it('tags: [] 不渲染 chips', () => {
     renderRow({ record: makeTextRecord({ tags: [] }) });
     expect(document.querySelector('.flex-wrap')).toBeNull();
   });
@@ -218,36 +267,5 @@ describe('RecordRow 记录行', () => {
     const chip = screen.getByText('工作');
     expect(chip.style.backgroundColor).toBe('rgb(212, 212, 212)');
     expect(chip.style.color).toBe('rgb(255, 255, 255)');
-  });
-
-  it('aiSummary 非空时渲染「AI 摘要：xxx」，且位于预览内容与时间戳之间', () => {
-    const { container } = renderRow({
-      record: makeTextRecord({ aiSummary: '这是一句摘要' }),
-    });
-    const summaryEl = screen.getByText('AI 摘要：这是一句摘要');
-    expect(summaryEl.className).toContain('text-xs');
-
-    // textContent 顺序断言：预览内容 → AI 摘要 → 时间戳
-    const content = container.querySelector('.min-w-0') as HTMLElement;
-    const text = content.textContent ?? '';
-    const previewIdx = text.indexOf('一条文字记录');
-    const summaryIdx = text.indexOf('AI 摘要：这是一句摘要');
-    const timeIdx = text.indexOf('2024');
-    expect(previewIdx).toBeGreaterThanOrEqual(0);
-    expect(summaryIdx).toBeGreaterThan(previewIdx);
-    expect(timeIdx).toBeGreaterThan(summaryIdx);
-  });
-
-  it('aiSummary 为 null/undefined 时不渲染摘要行', () => {
-    const { container: nullContainer } = renderRow({
-      record: makeTextRecord({ aiSummary: null }),
-    });
-    expect(nullContainer.textContent).not.toContain('AI 摘要');
-    cleanup();
-
-    const { aiSummary: _omit, ...withoutSummary } = makeImageRecord();
-    void _omit;
-    const { container: undefContainer } = renderRow({ record: withoutSummary });
-    expect(undefContainer.textContent).not.toContain('AI 摘要');
   });
 });

@@ -399,6 +399,70 @@ describe('createCaptureWithAttachments analysis 写入（analyses 表）', () =>
     expect(row).toEqual({ record_id: record.id, summary: '一句话', model: 'kimi-k2.6' });
   });
 
+  it('analysis 携带 grade 时写入 analyses.grade，读回 aiGrade 为对应枚举值', () => {
+    const record = createCaptureWithAttachments({
+      text: '观点记录',
+      attachments: [{ filePath: 'images/graded.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6', grade: 'high' },
+    });
+
+    const row = db
+      .prepare(`SELECT grade FROM analyses WHERE record_id = ?`)
+      .get(record.id) as { grade: string | null };
+    expect(row.grade).toBe('high');
+
+    expect(listCaptures().find((r) => r.id === record.id)?.aiGrade).toBe('high');
+  });
+
+  it('grade 缺省时存 NULL（读回 aiGrade 为 null，analyses.grade 为 null）', () => {
+    const record = createCaptureWithAttachments({
+      text: '未分级',
+      attachments: [{ filePath: 'images/no-grade.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+
+    const row = db
+      .prepare(`SELECT grade FROM analyses WHERE record_id = ?`)
+      .get(record.id) as { grade: string | null };
+    expect(row.grade).toBeNull();
+    expect(listCaptures().find((r) => r.id === record.id)?.aiGrade).toBeNull();
+  });
+
+  it('grade 显式传 null 时存 NULL', () => {
+    const record = createCaptureWithAttachments({
+      text: '显式空分级',
+      attachments: [{ filePath: 'images/null-grade.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6', grade: null },
+    });
+
+    const row = db
+      .prepare(`SELECT grade FROM analyses WHERE record_id = ?`)
+      .get(record.id) as { grade: string | null };
+    expect(row.grade).toBeNull();
+    expect(listCaptures().find((r) => r.id === record.id)?.aiGrade).toBeNull();
+  });
+
+  it('事务性：attachments 插入失败时携带 grade 的 analyses 行也不残留（三表一致回滚）', () => {
+    db.exec(`
+      CREATE TRIGGER force_attachments_fail_for_grade
+      BEFORE INSERT ON attachments
+      BEGIN
+        SELECT RAISE(ABORT, 'forced attachment failure');
+      END;
+    `);
+
+    expect(() =>
+      createCaptureWithAttachments({
+        text: 'x',
+        attachments: [{ filePath: 'images/x.png', sizeBytes: 1 }],
+        analysis: { summary: '一句话', model: 'kimi-k2.6', grade: 'high' },
+      }),
+    ).toThrow();
+
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM records`).get()).toEqual({ count: 0 });
+    expect(analysesCount()).toBe(0);
+  });
+
   it('analysis 缺省时不写 analyses 行，记录正常返回', () => {
     const record = createCaptureWithAttachments({
       text: '无摘要',
@@ -510,6 +574,104 @@ describe('读取侧 aiSummary（listCaptures / queryCaptures LEFT JOIN analyses�
     expect(records).toHaveLength(1);
     expect(records[0].imagePaths).toEqual(['images/m1.png', 'images/m2.png', 'images/m3.png']);
     expect(records[0].aiSummary).toBe('多图摘要');
+  });
+});
+
+describe('读取侧 aiGrade（LEFT JOIN analyses.grade）', () => {
+  let tmpDir: string;
+  let db: ReturnType<typeof initDatabase>;
+
+  beforeEach(() => {
+    const setup = setupDb();
+    tmpDir = setup.tmpDir;
+    db = setup.db;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** 手工直插 analyses 行（含 grade），绕开写侧 DAO（写侧属任务 5 范围）。 */
+  function insertAnalysis(
+    recordId: number,
+    summary: string,
+    grade: string | null,
+  ): void {
+    db.prepare(
+      `INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, 'kimi-k2.6', ?)`,
+    ).run(recordId, summary, grade);
+  }
+
+  it('手工 INSERT 含 grade 的行后，listCaptures / queryCaptures / getById 读回对应枚举值', () => {
+    const high = createCapture({ text: '观点记录' });
+    const mid = createCapture({ text: '日常记录' });
+    insertAnalysis(high.id, '观点摘要', 'high');
+    insertAnalysis(mid.id, '日常摘要', 'mid');
+
+    expect(listCaptures().find((r) => r.id === high.id)?.aiGrade).toBe('high');
+    expect(listCaptures().find((r) => r.id === mid.id)?.aiGrade).toBe('mid');
+
+    const queried = queryCaptures({ keyword: '日常', page: 1, pageSize: 10 });
+    expect(queried.items[0].aiGrade).toBe('mid');
+
+    expect(getById(high.id)?.aiGrade).toBe('high');
+  });
+
+  it('grade 为 NULL 的行读回 aiGrade 为 null', () => {
+    const record = createCapture({ text: '未分级' });
+    insertAnalysis(record.id, '无分级摘要', null);
+
+    expect(listCaptures()[0].aiGrade).toBeNull();
+    expect(getById(record.id)?.aiGrade).toBeNull();
+  });
+
+  it('无 analyses 行的记录读回 aiGrade 为 null', () => {
+    createCapture({ text: '纯文字' });
+
+    expect(listCaptures()[0].aiGrade).toBeNull();
+  });
+
+  it('createCapture 纯文字直写返回的记录 aiGrade 为 null（RETURNING 补 NULL 列）', () => {
+    const record = createCapture({ text: 'hello shiguang' });
+
+    expect(record.aiGrade).toBeNull();
+  });
+
+  it('createCaptureWithAttachments 不带 analysis 时返回记录 aiGrade 为 null', () => {
+    const record = createCaptureWithAttachments({
+      text: '无摘要图文',
+      attachments: [{ filePath: 'images/no-grade.png', sizeBytes: 1 }],
+    });
+
+    expect(record.aiGrade).toBeNull();
+  });
+
+  it('多附件记录 aiGrade 在多个 JOIN 行下聚合正确（1:1 无行膨胀）', () => {
+    const record = createCaptureWithAttachments({
+      text: '',
+      sourceApp: null,
+      attachments: [
+        { filePath: 'images/g1.png', sizeBytes: 1 },
+        { filePath: 'images/g2.png', sizeBytes: 2 },
+      ],
+    });
+    insertAnalysis(record.id, '多图分级摘要', 'low');
+
+    const found = listCaptures()[0];
+    expect(found.imagePaths).toEqual(['images/g1.png', 'images/g2.png']);
+    expect(found.aiGrade).toBe('low');
+  });
+
+  it('queryCaptures 在 keyword 过滤下读回 aiGrade（JOIN 条件不干扰分级列）', () => {
+    const target = createCapture({ text: '关键词 分级' });
+    const other = createCapture({ text: '无关' });
+    insertAnalysis(target.id, '目标摘要', 'high');
+    insertAnalysis(other.id, '无关摘要', 'low');
+
+    const result = queryCaptures({ keyword: '关键词', page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0].aiGrade).toBe('high');
   });
 });
 
@@ -947,6 +1109,100 @@ describe('queryCaptures', () => {
 
     expect(result.total).toBe(1);
     expect(result.items.map((r) => r.text)).toEqual(['AI 记录']);
+  });
+
+  /** 手工直插 analyses 行（含 grade），绕开写侧 DAO（写侧属任务 5 范围）。 */
+  function insertAnalysis(
+    recordId: number,
+    summary: string,
+    grade: string | null,
+  ): void {
+    db.prepare(
+      `INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, 'kimi-k2.6', ?)`,
+    ).run(recordId, summary, grade);
+  }
+
+  it('grade 单值过滤：items 仅含对应级别记录且 total 只统计命中项', () => {
+    const high = createCapture({ text: '观点记录' });
+    const mid = createCapture({ text: '日常记录' });
+    const nulled = createCapture({ text: '未分级记录' });
+    insertAnalysis(high.id, '观点摘要', 'high');
+    insertAnalysis(mid.id, '日常摘要', 'mid');
+    insertAnalysis(nulled.id, '无分级摘要', null);
+
+    const result = queryCaptures({ grade: 'high', page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items.map((r) => r.id)).toEqual([high.id]);
+    expect(result.items[0].aiGrade).toBe('high');
+
+    const midResult = queryCaptures({ grade: 'mid', page: 1, pageSize: 10 });
+    expect(midResult.total).toBe(1);
+    expect(midResult.items.map((r) => r.id)).toEqual([mid.id]);
+  });
+
+  it('grade 为 NULL 的记录在任何 grade 过滤下均不命中', () => {
+    const nulled = createCapture({ text: '未分级记录' });
+    const high = createCapture({ text: '观点记录' });
+    insertAnalysis(nulled.id, '无分级摘要', null);
+    insertAnalysis(high.id, '观点摘要', 'high');
+
+    for (const grade of ['high', 'mid', 'low'] as const) {
+      const result = queryCaptures({ grade, page: 1, pageSize: 10 });
+      expect(result.items.map((r) => r.id)).not.toContain(nulled.id);
+    }
+    // NULL 记录也未丢失（缺省 = 全部时仍在）
+    const all = queryCaptures({ page: 1, pageSize: 10 });
+    expect(all.total).toBe(2);
+  });
+
+  it('不带 grade 时全部返回（缺省 = 全部）', () => {
+    const high = createCapture({ text: '观点记录' });
+    const mid = createCapture({ text: '日常记录' });
+    const plain = createCapture({ text: '无 analyses 行' });
+    insertAnalysis(high.id, '观点摘要', 'high');
+    insertAnalysis(mid.id, '日常摘要', 'mid');
+
+    const result = queryCaptures({ page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(3);
+    expect(result.items.map((r) => r.id).sort()).toEqual(
+      [high.id, mid.id, plain.id].sort(),
+    );
+  });
+
+  it('grade 过滤与 keyword 组合时条件间 AND', () => {
+    const hit = createCapture({ text: '会议纪要 目标' });
+    const wrongGrade = createCapture({ text: '随想 目标' });
+    insertAnalysis(hit.id, '目标摘要', 'high');
+    insertAnalysis(wrongGrade.id, '随想摘要', 'mid');
+
+    const result = queryCaptures({
+      keyword: '目标',
+      grade: 'high',
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.items.map((r) => r.text)).toEqual(['会议纪要 目标']);
+  });
+
+  it('grade 过滤与 tagNames 组合时条件间 AND', () => {
+    const hit = createCapture({ text: '工作观点', tags: ['工作'] });
+    const wrongTag = createCapture({ text: '灵感观点', tags: ['灵感'] });
+    insertAnalysis(hit.id, '观点摘要', 'high');
+    insertAnalysis(wrongTag.id, '观点摘要', 'high');
+
+    const result = queryCaptures({
+      tagNames: ['工作'],
+      grade: 'high',
+      page: 1,
+      pageSize: 10,
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.items.map((r) => r.id)).toEqual([hit.id]);
   });
 
   it('hasImages 与 since/until 组合：条件同取交集', () => {

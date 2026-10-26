@@ -4,6 +4,11 @@
  * M4 起捕获记录支持图文整包：记录可携带文字与多张图片，图片关联
  * attachments 相对路径（相对 userData 根）。
  */
+/**
+ * AI 摘要分级（analyses.grade 三档枚举）：画像权重『AI 判重点』数据来源
+ */
+export type Grade = 'high' | 'mid' | 'low';
+
 export interface CaptureRecord {
   id: number;
   text: string;
@@ -20,6 +25,8 @@ export interface CaptureRecord {
   tags: string[];
   /** AI 一句话摘要（analyses.summary）；无摘要的存量记录为 null/undefined */
   aiSummary?: string | null;
+  /** AI 摘要分级（analyses.grade）；无分级（grade 为 NULL）的记录为 null/undefined */
+  aiGrade?: Grade | null;
 }
 
 /** 标签条目；color 为创建时从 TAG_COLOR_PALETTE 随机取值的 hex */
@@ -92,6 +99,8 @@ export interface QueryCapturesPayload {
   hasImages?: boolean;
   /** 标签名数组，任一命中 OR；缺省/空数组 = 不过滤 */
   tagNames?: string[];
+  /** 级别单值过滤（analyses.grade），缺省 = 全部；仅匹配非 NULL 记录 */
+  grade?: Grade;
   page: number;
   pageSize: number;
 }

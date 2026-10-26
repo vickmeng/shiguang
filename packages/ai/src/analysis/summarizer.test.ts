@@ -162,6 +162,40 @@ describe('analyzeCapture', () => {
 
     await expect(analyzeCapture({ text: 'x', images: [] })).rejects.toThrow('AI 返回空摘要');
   });
+
+  it('AI 返回 grade 时 analyzeCapture 解析为 { meaningful: true, summary, grade }', async () => {
+    const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({
+      object: { meaningful: true, summary: 'x', grade: 'high' },
+    });
+
+    const result = await analyzeCapture({ text: '观点类记录', images: [] });
+
+    expect(result).toEqual({ meaningful: true, summary: 'x', grade: 'high' });
+  });
+
+  it('AI 未返回 grade 时解析通过且返回对象无 grade 键（缺失存 NULL）', async () => {
+    const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({ object: { meaningful: true, summary: 'x' } });
+
+    const result = await analyzeCapture({ text: '日常记录', images: [] });
+
+    expect(result).toEqual({ meaningful: true, summary: 'x' });
+    expect('grade' in result).toBe(false);
+  });
+
+  it('meaningful=false 分支返回无 grade 键', async () => {
+    const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({ object: { meaningful: false } });
+
+    const result = await analyzeCapture({ text: '乱敲', images: [] });
+
+    expect(result).toEqual({ meaningful: false });
+    expect('grade' in result).toBe(false);
+  });
 });
 
 describe('SUMMARIZER_SYSTEM_PROMPT 与 Agent 构造（design 3.2 草案逐字锁定）', () => {
@@ -233,7 +267,17 @@ describe('SUMMARIZER_SYSTEM_PROMPT 与 Agent 构造（design 3.2 草案逐字锁
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('纯符号');
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('60 字');
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('图片是内容的一部分，不是附件');
-    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('{"meaningful": true/false, "summary": "..."}');
+  });
+
+  it('SUMMARIZER_SYSTEM_PROMPT 含分级任务条款与改写后 JSON 格式行', async () => {
+    const { SUMMARIZER_SYSTEM_PROMPT } = await import('./summarizer');
+
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('对未来了解用户的价值');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('high：观点、决定、计划');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('仅当 meaningful=true 时输出分级');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain(
+      '严格输出 JSON：{"meaningful": true/false, "summary": "...", "grade": "high"|"mid"|"low"}（不值得保存时省略 summary 与 grade）',
+    );
   });
 
   it('structuredOutput schema（zod）：meaningful=true 可无 summary；summary 非字符串拒绝', async () => {
@@ -257,6 +301,25 @@ describe('SUMMARIZER_SYSTEM_PROMPT 与 Agent 构造（design 3.2 草案逐字锁
     expect(options.structuredOutput.schema.safeParse({ summary: '缺 meaningful' }).success).toBe(
       false,
     );
+  });
+
+  it('grade 非法枚举值（如「高」）由 schema 拒绝；合法三档与缺失均通过', async () => {
+    const { setAnalysisImagesBaseDir } = await import('./summarizer');
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({ object: { meaningful: false } });
+    const { analyzeCapture } = await import('./summarizer');
+
+    await analyzeCapture({ text: 'x', images: [] });
+
+    const options = generateMock.mock.calls[0][1] as {
+      structuredOutput: { schema: { safeParse: (v: unknown) => { success: boolean } } };
+    };
+    const { safeParse } = options.structuredOutput.schema;
+    expect(safeParse({ meaningful: true, summary: 'x', grade: '高' }).success).toBe(false);
+    expect(safeParse({ meaningful: true, summary: 'x', grade: 'high' }).success).toBe(true);
+    expect(safeParse({ meaningful: true, summary: 'x', grade: 'mid' }).success).toBe(true);
+    expect(safeParse({ meaningful: true, summary: 'x', grade: 'low' }).success).toBe(true);
+    expect(safeParse({ meaningful: true, summary: 'x' }).success).toBe(true);
   });
 });
 

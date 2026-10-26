@@ -18,8 +18,9 @@
  * 进入 try 块依次 analyzeCapture（@shiguang/ai，Kimi 多模态门卫+摘要）→
  * 有意义判定（!analysis.meaningful 或 summary 空白）时抛
  * AI_NOT_MEANINGFUL_MESSAGE → createCaptureWithAttachments 携
- * analysis: { summary, model: resolveKimiModel() } 入库；try 块内任一步抛错
- * 均逐个 fs.rm(force) 清理已写图片后原样 rethrow，DAO 零调用。
+ * analysis: { summary, model: resolveKimiModel(), grade } 入库（ai-record-grade：
+ * AI 返回 grade 时原样透传，未返回时 grade: null 存 NULL，不阻塞入库）；
+ * try 块内任一步抛错均逐个 fs.rm(force) 清理已写图片后原样 rethrow，DAO 零调用。
  *
  * mock electron 的 ipcMain/nativeImage/clipboard/app 与 @shiguang/ai 的
  * getById（DAO 真行为由 captureDao.test.ts 覆盖；queryCaptures 仍由
@@ -162,7 +163,7 @@ describe('capture:create', () => {
       sourceApp: null,
       attachments: written,
       tags,
-      analysis: { summary: '默认摘要', model: 'kimi-k2.6' },
+      analysis: { summary: '默认摘要', model: 'kimi-k2.6', grade: null },
     });
     expect(vi.mocked(writeImageFiles).mock.invocationCallOrder[0]).toBeLessThan(
       stubs.createCaptureWithAttachments.mock.invocationCallOrder[0],
@@ -246,7 +247,7 @@ describe('capture:create', () => {
       document,
       sourceApp: null,
       attachments: [],
-      analysis: { summary: '默认摘要', model: 'kimi-k2.6' },
+      analysis: { summary: '默认摘要', model: 'kimi-k2.6', grade: null },
     });
   });
 
@@ -305,7 +306,7 @@ describe('capture:create AI 分析编排', () => {
     ],
   };
 
-  it('成功路径：writeImageFiles → analyzeCapture → createCaptureWithAttachments 按序调用，DAO 入参携带 analysis: { summary, model }，不触发图片清理', async () => {
+  it('成功路径：writeImageFiles → analyzeCapture → createCaptureWithAttachments 按序调用，DAO 入参携带 analysis: { summary, model, grade: null }（AI 未返回 grade），不触发图片清理', async () => {
     vi.mocked(writeImageFiles).mockResolvedValue(written);
     stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: '一句话摘要' });
     stubs.createCaptureWithAttachments.mockResolvedValue(record({ id: 10 }));
@@ -318,7 +319,7 @@ describe('capture:create AI 分析编排', () => {
     });
     expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
       expect.objectContaining({
-        analysis: { summary: '一句话摘要', model: 'kimi-k2.6' },
+        analysis: { summary: '一句话摘要', model: 'kimi-k2.6', grade: null },
       }),
     );
     const orderWrite = vi.mocked(writeImageFiles).mock.invocationCallOrder[0];
@@ -328,6 +329,34 @@ describe('capture:create AI 分析编排', () => {
     expect(orderAnalyze).toBeLessThan(orderDao);
     // 成功路径不触发清理
     expect(stubs.fs.promises.rm).not.toHaveBeenCalled();
+  });
+
+  it('analyzeCapture 返回 grade（AI 判重点）：analysis 载荷原样透传 grade', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: 's', grade: 'mid' });
+    stubs.createCaptureWithAttachments.mockResolvedValue(record({ id: 11 }));
+
+    await invokeCreate(payload);
+
+    expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analysis: { summary: 's', model: 'kimi-k2.6', grade: 'mid' },
+      }),
+    );
+  });
+
+  it('analyzeCapture 返回无 grade 键：analysis 载荷 grade 归一为 null（存 NULL 不阻塞入库）', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: 's' });
+    stubs.createCaptureWithAttachments.mockResolvedValue(record({ id: 12 }));
+
+    await invokeCreate(payload);
+
+    expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analysis: { summary: 's', model: 'kimi-k2.6', grade: null },
+      }),
+    );
   });
 
   it('meaningful=false：invoke 以 AI_NOT_MEANINGFUL_MESSAGE 拒绝，已写图片逐个 fs.rm 清理，DAO 零调用', async () => {

@@ -11,10 +11,14 @@
 - **超时用 `AbortSignal.timeout(60_000)` 经 `agent.generate` 传入，不自写 setTimeout 竞态**：AbortSignal 是 AI SDK/Mastra 的官方取消契约，超时即中止在途 HTTP 请求，自写计时器做不到。
 - **门卫无意义与其他 AI 失败在主进程合流为「抛错 + 已写盘图片清理」，渲染层按 shared 常量 `AI_NOT_MEANINGFUL_MESSAGE` 精确匹配 message 区分 toast**：两路径失败态/重试语义相同，仅 toast 文案不同；不新增 IPC 错误码通道，不展示 AI 返回的具体原因（文案稳定性与产品口径）。无意义判定在 handler 层（DAO 不做门卫）。
 - **图片读盘转 base64 在 summarizer（packages/ai）内完成，baseDir 经 `setAnalysisImagesBaseDir` 注入**：analyzeCapture 签名只收相对 filePath，磁盘解析只能模块内完成；packages/ai 不依赖 electron，注入模式与 setCaptureDatabase 同，DAO 不碰磁盘铁律不破。
+- **grade 经迁移 0006 以可空 TEXT 列入 analyses，不建关联表、不加 CHECK**：analyses 与 records 已 1:1，grade 是摘要同级属性，加列是最小扩展；合法性唯一防线是写入前 zod enum，读出仅透传，与既有「校验收敛应用层」迁移风格一致。
+- **迁移 0006 的 down 直接用 `ALTER TABLE analyses DROP COLUMN grade`，不重建表**：better-sqlite3 ^12.11.1 内置 SQLite ≥3.35（2021-03 起）支持 DROP COLUMN，一行 DDL 即可；重建表需复制数据 + 重建 FK/索引，无谓复杂度与风险。
+- **grade 缺失与非法用「zod `.optional()` + 天然失败」一语双关，不加应用层分支**：optional 精确表达「缺失通过（存 NULL 不阻塞入库）/ 非法拒绝（整链失败可重试）」，Mastra structured output 解析失败自然抛错，走迭代一既有失败路径（抛错 + 图片清理），代码零新增 catch。
+- **分级收敛进既有 summarizer 同一次调用（`{meaningful, summary?, grade?}`），不建独立分级链路**：独立链路 doubles LLM 成本与延迟，且摘要与分级同上下文判定质量更稳；prompt 以第三任务（判「对未来了解用户的价值」）+ zod description 双写判定标准。
 
 ## 技术债务
 
-- [ ] 记录编辑联动摘要失配：当前记录无编辑能力，未来引入编辑后摘要必然失配——编辑功能立项时须把「编辑触发摘要重跑」作为其需求一部分；本期不预埋 prompt_version
+- [ ] 记录编辑联动摘要/分级失配：当前记录无编辑能力，未来引入编辑后摘要与 grade 同样失配——编辑功能立项时须把「编辑触发摘要重跑」作为其需求一部分；本期不预埋 prompt_version
 - [ ] AI 分析成本与隐私规模化压力：逐条实时上云（文字+全部图片按 token 计费）随记录量累积成本与暴露面；出现批量导入/高频记录场景时评估本地小模型兜底或降频策略，届时单独立项
 - [ ] 内置 `kimi-code-plan-cn` router provider 可进一步简化模型接入（届时可删 custom endpoint 函数配置，直接传 provider 模型 id 字符串、依赖其内置 KIMI_API_KEY 认证）；当前不采用：官方 provider 模型列表不含 kimi-k2.6，且 `KIMI_MODEL` 任意模型覆盖语义须保留
 - [ ] prompt 调优无重跑机制：SUMMARIZER_SYSTEM_PROMPT 调优后只能用新数据验证，旧摘要不升级；未来若需升级须单独立项重跑工具（届时再加 prompt_version）

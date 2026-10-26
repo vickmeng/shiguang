@@ -2,12 +2,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { QueryCapturesPayload } from '@shiguang/shared';
-import type { Tag } from '@shiguang/shared';
+import type { CaptureRecord, Grade, QueryCapturesPayload, Tag } from '@shiguang/shared';
 import type { ShiguangApi } from '../../../preload';
 import { RecordsPage } from './RecordsPage';
 
-function makeRecords(total: number) {
+function makeRecords(total: number, overrides: Partial<CaptureRecord> = {}) {
   return Array.from({ length: total }, (_, i) => ({
     id: i + 1,
     text: `记录 ${i + 1}`,
@@ -16,6 +15,9 @@ function makeRecords(total: number) {
     createdAt: '2024-05-01T08:30:00.000Z',
     imagePaths: [] as string[],
     tags: [] as string[],
+    aiSummary: null,
+    aiGrade: null,
+    ...overrides,
   }));
 }
 
@@ -100,29 +102,6 @@ describe('RecordsPage 记录页', () => {
 
     expect(api.capture.list).toHaveBeenLastCalledWith({ page: 2, pageSize: 20 });
     expect(await screen.findAllByRole('checkbox')).toHaveLength(5);
-  });
-
-  it('点击记录行展开显示全文，再次点击折叠回截断预览', async () => {
-    const user = userEvent.setup();
-    const api = createApiMock(25);
-    window.api = api;
-    const { container } = render(<RecordsPage />);
-
-    const row = await screen.findByText('记录 1');
-    const rowContainer = row.parentElement!;
-    // 默认截断预览（预览容器限高 max-h-40 + 渐变遮罩）
-    expect(row.closest('.max-h-40')).toBeTruthy();
-    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeTruthy();
-
-    // 点击展开：移除限高与遮罩，全量展示
-    await user.click(rowContainer);
-    expect(row.closest('.max-h-40')).toBeNull();
-    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeNull();
-
-    // 再次点击折叠回截断预览
-    await user.click(rowContainer);
-    expect(row.closest('.max-h-40')).toBeTruthy();
-    expect(row.closest('.relative')!.querySelector('.bg-gradient-to-t')).toBeTruthy();
   });
 
   it('输入关键词触发带 keyword 的查询，并从当前页重置回第 1 页', async () => {
@@ -309,20 +288,6 @@ describe('RecordsPage 记录页', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('展开一条不影响其他行的截断状态', async () => {
-    const user = userEvent.setup();
-    const api = createApiMock(25);
-    window.api = api;
-    render(<RecordsPage />);
-
-    const first = await screen.findByText('记录 1');
-    const second = screen.getByText('记录 2');
-    await user.click(first.parentElement!);
-
-    expect(first.closest('.max-h-40')).toBeNull();
-    expect(second.closest('.max-h-40')).toBeTruthy();
   });
 
   it('点击删除按钮弹出确认弹窗，取消则不删除且关闭弹窗', async () => {
@@ -699,12 +664,12 @@ describe('RecordsPage 记录页', () => {
   });
 
   describe('图片记录混合渲染（任务 23）', () => {
-    /** 混合记录：1/3 纯文字，2/4 含图（imagePaths 非空） */
+    /** 混合记录：1/3 纯文字，2/4 含图（imagePaths 非空）；摘要列由 aiSummary 驱动 */
     const mixedRecords = [
-      { id: 1, text: '文字记录 1', document: null, sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[], tags: [] as string[] },
-      { id: 2, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/a.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'], tags: [] as string[] },
-      { id: 3, text: '文字记录 3', document: null, sourceApp: null, createdAt: '2024-05-03T10:00:00.000Z', imagePaths: [] as string[], tags: [] as string[] },
-      { id: 4, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/b.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-04T11:00:00.000Z', imagePaths: ['images/b.png'], tags: [] as string[] },
+      { id: 1, text: '文字记录 1', document: null, sourceApp: null, createdAt: '2024-05-01T08:30:00.000Z', imagePaths: [] as string[], tags: [] as string[], aiSummary: '文字记录 1', aiGrade: null },
+      { id: 2, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/a.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-02T09:00:00.000Z', imagePaths: ['images/a.png'], tags: [] as string[], aiSummary: '图文记录摘要 2', aiGrade: null },
+      { id: 3, text: '文字记录 3', document: null, sourceApp: null, createdAt: '2024-05-03T10:00:00.000Z', imagePaths: [] as string[], tags: [] as string[], aiSummary: '文字记录 3', aiGrade: null },
+      { id: 4, text: '', document: '{"root":{"children":[{"type":"paragraph","children":[{"type":"image","src":"images/b.png"}]}]}}', sourceApp: 'screenshot', createdAt: '2024-05-04T11:00:00.000Z', imagePaths: ['images/b.png'], tags: [] as string[], aiSummary: '图文记录摘要 4', aiGrade: null },
     ];
 
     /** mock capture.list 恒返回混合记录（类型筛选已移除，payload 不再携带 hasImages） */
@@ -730,20 +695,23 @@ describe('RecordsPage 记录页', () => {
       };
     }
 
-    it('image 行与 text 行同屏渲染：文字预览与 shiguang-image:// 图片并存', async () => {
+    it('image 行与 text 行同屏渲染：表内仅摘要列，全文与图片在详情弹窗', async () => {
+      const user = userEvent.setup();
       const api = createMixedListApiMock();
       window.api = api;
       const { container } = render(<RecordsPage />);
 
-      // text 行渲染文字预览
+      // 摘要列（aiSummary）同屏渲染文字行与图文行
       expect(await screen.findByText('文字记录 1')).toBeTruthy();
-      expect(screen.getByText('文字记录 3')).toBeTruthy();
-      // image 行经 document 渲染协议图片（收起/展开形态一致）
-      const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[];
-      expect(imgs.map((i) => i.src)).toEqual([
-        'shiguang-image://a.png',
-        'shiguang-image://b.png',
-      ]);
+      expect(screen.getByText('图文记录摘要 2')).toBeTruthy();
+      // 表格内不渲染图文预览（RichCapturePreview 已由详情弹窗承接）
+      expect(container.querySelector('table img')).toBeNull();
+
+      // 点摘要打开详情弹窗：document 渲染 shiguang-image:// 协议图片
+      await user.click(screen.getByRole('button', { name: '图文记录摘要 2' }));
+      const dialog = screen.getByRole('dialog');
+      const imgs = Array.from(dialog.querySelectorAll('img')) as HTMLImageElement[];
+      expect(imgs.map((i) => i.src)).toEqual(['shiguang-image://a.png']);
       expect(api.capture.list).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
     });
 
@@ -864,6 +832,153 @@ describe('RecordsPage 记录页', () => {
       await screen.findByText('还没有任何记录');
       await user.click(screen.getByRole('textbox', { name: '筛选标签' }));
       await user.click(screen.getByRole('option', { name: '工作' }));
+
+      expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
+      expect(screen.queryByText('还没有任何记录')).toBeNull();
+    });
+  });
+
+  describe('表格化与详情弹窗（任务 11）', () => {
+    const detailRecords = [
+      {
+        id: 1,
+        text: '观点记录全文',
+        document: null,
+        sourceApp: null,
+        createdAt: '2024-05-01T08:30:00.000Z',
+        imagePaths: [] as string[],
+        tags: ['工作'],
+        aiSummary: '观点摘要',
+        aiGrade: 'high' as Grade,
+      },
+    ];
+
+    function createDetailApiMock(): ShiguangApi {
+      return {
+        capture: {
+          create: vi.fn(),
+          list: vi.fn(() => Promise.resolve({ items: detailRecords, total: detailRecords.length })),
+          delete: vi.fn(() => Promise.resolve()),
+          copyImage: vi.fn(),
+        },
+        console: { open: vi.fn() },
+        input: { blur: vi.fn(), close: vi.fn() },
+        pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
+        tags: {
+          list: vi.fn(() => Promise.resolve([{ id: 1, name: '工作', color: '#f59e0b' }] as Tag[])),
+          create: vi.fn(),
+          rename: vi.fn(),
+          delete: vi.fn(),
+          lastGet: vi.fn(() => Promise.resolve([] as string[])),
+          lastSet: vi.fn(),
+        },
+      };
+    }
+
+    it('列表渲染为 table，表头六列：选择/时间/摘要/级别/标签/操作', async () => {
+      const api = createApiMock(2);
+      window.api = api;
+      const { container } = render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      expect(container.querySelector('table')).toBeTruthy();
+      const ths = Array.from(container.querySelectorAll('th'));
+      expect(ths).toHaveLength(6);
+      expect(ths[0].getAttribute('aria-label')).toBe('选择');
+      expect(ths[1].textContent).toBe('时间');
+      expect(ths[2].textContent).toBe('摘要');
+      expect(ths[3].textContent).toBe('级别');
+      expect(ths[4].textContent).toBe('标签');
+      expect(ths[5].textContent).toBe('操作');
+    });
+
+    it('点摘要 button 打开详情弹窗渲染全文与级别徽标，点关闭按钮与遮罩均可关闭', async () => {
+      const user = userEvent.setup();
+      const api = createDetailApiMock();
+      window.api = api;
+      const { container } = render(<RecordsPage />);
+
+      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      const dialog = screen.getByRole('dialog');
+      expect(dialog.getAttribute('aria-modal')).toBe('true');
+      // 全文（text 兜底）与元信息行（时间 / 级别徽标 / 标签 chips）
+      expect(dialog.textContent).toContain('观点记录全文');
+      expect(dialog.textContent).toContain('高');
+      expect(dialog.textContent).toContain('工作');
+
+      // 关闭按钮
+      await user.click(screen.getByRole('button', { name: '关闭' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      // 遮罩点击关闭
+      await user.click(screen.getByRole('button', { name: '观点摘要' }));
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      const overlay = container.querySelector('.bg-black\\/40');
+      expect(overlay).toBeTruthy();
+      fireEvent.click(overlay!);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('单删命中当前详情记录时弹窗关闭', async () => {
+      const user = userEvent.setup();
+      const api = createDetailApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      expect(screen.getByRole('dialog')).toBeTruthy();
+
+      await user.click(screen.getByRole('button', { name: '删除记录 1' }));
+      await user.click(screen.getByRole('button', { name: '确认' }));
+
+      expect(api.capture.delete).toHaveBeenCalledWith({ ids: [1] });
+      // 删除确认框与详情弹窗均关闭
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    it('批删命中当前详情记录时弹窗关闭', async () => {
+      const user = userEvent.setup();
+      const api = createDetailApiMock();
+      window.api = api;
+      render(<RecordsPage />);
+
+      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      expect(screen.getByRole('dialog')).toBeTruthy();
+
+      await user.click(screen.getByRole('checkbox', { name: '选择记录 1' }));
+      await user.click(screen.getByRole('button', { name: '批量删除' }));
+      await user.click(screen.getByRole('button', { name: '确认' }));
+
+      expect(api.capture.delete).toHaveBeenCalledWith({ ids: [1] });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+  });
+
+  describe('级别筛选（任务 11）', () => {
+    it('级别下拉选「高」payload 含 grade: high 且 page 归 1，选回「全部」不含 grade', async () => {
+      const user = userEvent.setup();
+      const api = createApiMock(25);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findAllByRole('checkbox');
+      await user.click(screen.getByRole('button', { name: '下一页' }));
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 2, pageSize: 20 });
+
+      fireEvent.change(screen.getByLabelText('筛选级别'), { target: { value: 'high' } });
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, grade: 'high' });
+
+      fireEvent.change(screen.getByLabelText('筛选级别'), { target: { value: '' } });
+      expect(api.capture.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 20 });
+    });
+
+    it('仅级别筛选无结果时显示调整筛选引导文案', async () => {
+      const api = createApiMock(0);
+      window.api = api;
+      render(<RecordsPage />);
+
+      await screen.findByText('还没有任何记录');
+      fireEvent.change(screen.getByLabelText('筛选级别'), { target: { value: 'low' } });
 
       expect(await screen.findByText('没有找到匹配的记录')).toBeTruthy();
       expect(screen.queryByText('还没有任何记录')).toBeNull();

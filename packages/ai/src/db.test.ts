@@ -9,6 +9,7 @@ import { migration as attachmentMigration } from './migrations/0002_attachment';
 import { migration as dropTypeMigration } from './migrations/0003_drop_type';
 import { migration as tagsMigration } from './migrations/0004_tags';
 import { migration as analysesMigration } from './migrations/0005_analyses';
+import { migration as analysesGradeMigration } from './migrations/0006_analyses_grade';
 
 describe('initDatabase', () => {
   let tmpDir: string;
@@ -79,7 +80,14 @@ describe('initDatabase', () => {
       .prepare('SELECT name FROM _migrations ORDER BY name')
       .all()
       .map((row) => (row as { name: string }).name);
-    expect(logged).toEqual(['0001_init', '0002_attachment', '0003_drop_type', '0004_tags', '0005_analyses']);
+    expect(logged).toEqual([
+      '0001_init',
+      '0002_attachment',
+      '0003_drop_type',
+      '0004_tags',
+      '0005_analyses',
+      '0006_analyses_grade',
+    ]);
 
     db2.close();
   });
@@ -406,6 +414,124 @@ describe('迁移 0005_analyses', () => {
     expect(
       (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
     ).toBe(1);
+
+    db.close();
+  });
+});
+
+describe('迁移 0006_analyses_grade', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-migration-0006-test-'));
+    dbPath = join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('迁移后 analyses 表含可空 grade 列（无默认值、无 CHECK）', () => {
+    const db = initDatabase(dbPath);
+
+    const cols = db
+      .prepare('PRAGMA table_info(analyses)')
+      .all() as unknown as Array<{ name: string; notnull: number; dflt_value: string | null }>;
+    const gradeCol = cols.find((c) => c.name === 'grade');
+    expect(gradeCol).toBeDefined();
+    expect(gradeCol!.notnull).toBe(0);
+    expect(gradeCol!.dflt_value).toBeNull();
+
+    db.close();
+  });
+
+  it('旧库（0005 态已有 analyses 行，grade 缺省）升级后现有行不受影响（grade 读出 NULL）', () => {
+    // 手工构造仅应用 0001~0005 的"旧库"并写入 records + analyses 行
+    const oldDb = new Database(dbPath);
+    oldDb.pragma('foreign_keys = ON');
+    void migration.up({ context: oldDb });
+    void attachmentMigration.up({ context: oldDb });
+    void dropTypeMigration.up({ context: oldDb });
+    void tagsMigration.up({ context: oldDb });
+    void analysesMigration.up({ context: oldDb });
+    oldDb.prepare(`INSERT INTO records (text) VALUES ('旧记录')`).run();
+    const oldRecordId = Number(
+      (oldDb.prepare(`SELECT id FROM records WHERE text = '旧记录'`).get() as { id: number }).id,
+    );
+    oldDb.prepare(`INSERT INTO analyses (record_id, summary, model) VALUES (?, ?, ?)`).run(
+      oldRecordId,
+      '旧摘要',
+      'kimi-k2.6',
+    );
+    oldDb.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+    for (const name of [
+      migration.name,
+      attachmentMigration.name,
+      dropTypeMigration.name,
+      tagsMigration.name,
+      analysesMigration.name,
+    ]) {
+      oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(name);
+    }
+    oldDb.close();
+
+    // 再次 initDatabase：应跳过 0001~0005、仅应用 0006
+    const db = initDatabase(dbPath);
+
+    const oldAnalysis = db
+      .prepare(`SELECT summary, grade FROM analyses WHERE record_id = ?`)
+      .get(oldRecordId) as { summary: string; grade: string | null };
+    expect(oldAnalysis.summary).toBe('旧摘要');
+    expect(oldAnalysis.grade).toBeNull();
+
+    // 新行可写 grade（可空列允许带/不带 grade 写入）
+    db.prepare(`INSERT INTO records (text) VALUES ('新记录')`).run();
+    const newRecordId = Number(
+      (db.prepare(`SELECT id FROM records WHERE text = '新记录'`).get() as { id: number }).id,
+    );
+    db.prepare(`INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, ?, ?)`).run(
+      newRecordId,
+      '新摘要',
+      'kimi-k2.6',
+      'high',
+    );
+    const newAnalysis = db
+      .prepare(`SELECT grade FROM analyses WHERE record_id = ?`)
+      .get(newRecordId) as { grade: string };
+    expect(newAnalysis.grade).toBe('high');
+
+    db.close();
+  });
+
+  it('migration.down() 后 analyses 表不再含 grade 列，既有 summary 数据保留', async () => {
+    const db = initDatabase(dbPath);
+    db.prepare(`INSERT INTO records (text) VALUES ('带分级的记录')`).run();
+    const recordId = Number(
+      (db.prepare(`SELECT id FROM records WHERE text = '带分级的记录'`).get() as { id: number })
+        .id,
+    );
+    db.prepare(`INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, ?, ?)`).run(
+      recordId,
+      '一句话摘要',
+      'kimi-k2.6',
+      'mid',
+    );
+
+    await analysesGradeMigration.down({ context: db });
+
+    const cols = db
+      .prepare('PRAGMA table_info(analyses)')
+      .all() as unknown as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).not.toContain('grade');
+    expect(cols.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['record_id', 'summary', 'model', 'created_at']),
+    );
+
+    const row = db
+      .prepare(`SELECT summary, model FROM analyses WHERE record_id = ?`)
+      .get(recordId) as { summary: string; model: string };
+    expect(row).toEqual({ summary: '一句话摘要', model: 'kimi-k2.6' });
 
     db.close();
   });

@@ -14,13 +14,16 @@
 - **document 列双写：完整版式入 `records.document`（Lexical EditorState JSON，可空），拍平值做读模型**：写入与 text/attachments 同事务；本期读侧不消费，为「记录编辑」功能预埋（`editor.parseEditorState(document)` 无损还原，ImageNode 反序列化时从 attachments 重建 objectURL）；M1/M4 老行 NULL；不选只存拍平值（版式丢失，编辑只能有损重建）。
 - **复制语义按有无图片分流**：有图记录复制首图（`capture:copy-image` invoke 挪入 captureHandlers.ts，取 `imagePaths[0]`，handler 内 W3C 异步 `clipboard.write([ClipboardItem])`，Electron 44 起同步 `clipboard.writeImage` 路径不再可用）；纯文字记录走 renderer `navigator.clipboard.writeText`。
 - **筛选区由 TanStack Form 驱动，快捷预设 = 「给 RangeTimePicker 赋值并触发查询」的快捷键**：时间值唯一来源为选择器（起/止 datetime-local 精确到秒，always 可见），不存在独立预设状态——「全部」=清空起止、「今天/7d/30d」=给选择器赋对应区间；不引第三方日期组件，保持零新增依赖。
-- **记录行渲染由 `imagePaths.length > 0` 派生**（原 `record.type === 'image'` 分支随迁移 0003 删除）：首图缩略 + 多图「共N张」角标（>1 时）+ 展开态纵向全列单图。
+- **记录页为表格化列表，行内不做图片/全文预览**：列固定为 选择 | 时间 | 摘要 | 级别 | 标签 | 操作；图文全文经摘要 td 点击弹 `record-detail-dialog`（复用 RichCapturePreview expanded）查看，原行内 expand 机制随表格化整体移除。行渲染原地改造（RecordRow li→tr）而非新建第二套 RecordTable 行组件——避免渲染逻辑双份漂移。
 - **记录页读图走自定义 protocol `shiguang-image://`**（自原 screenshot 领域迁入，protocol 随截图删除保留为图片读通道）：不选 base64 入 DB（SQLite 膨胀、分页负重）、data URL、file://（打包态受 asar/权限限制且暴露绝对路径）；文件名 basename 白名单化 + isSubPath 防目录穿越，越界/非 .png/不存在一律返 404 空 Response，渲染端 onError 兜底「图片丢失」占位，记录仍可删。
 - **展示层序列化选型：官方 `@lexical/html` 取代手写 `parseDocument`**（修复图文同段落丢字 bug——手写解析器含"image 节点独占段落"假设，丢弃同段文字）：`documentToHtml`（`apps/desktop/src/renderer/components/rich-capture-preview.tsx:56`，核心序列化函数）用 `editor.parseEditorState()` + `$generateHtmlFromNodes(editor, null)` 导出 HTML，天然忠实版式且 format（加粗/斜体）免费获得；未来新增节点类型只需注册 Node 类，不再自行维护结构假设。
 - **装饰节点必须显式 `exportDOM()`**：Lexical 官方明确 decorate() 的 JSX 不进导出 HTML，默认导出只用 createDOM() 元素（本项目 ImageNode 的 createDOM 是空 span，会导出空内容）；故 `ImageNode.exportDOM()`（`apps/desktop/src/renderer/input/features/capture/image-node.ts:58`，装饰节点的 DOM 导出方法）按官方 prescribed 做法显式返回 `<img>`。
 - **headless 编辑器用 `createEditor({ disableEvents: true })`**：`documentToHtml`（rich-capture-preview.tsx:58）不走官方 `createHeadlessEditor`——0.52 核心包未导出该符号（它在 `@lexical/headless` 包），disableEvents:true 即其等价本质，避免多引一个依赖。
 - **img 协议 URL 重写时机：官方序列化之后、入 React 之前**（`documentToHtml` 内 DOMParser 阶段，rich-capture-preview.tsx:86）：DOMParser 解析导出的 HTML，每个 img 的 src 只取 basename 重写为 `shiguang-image://<basename>`（协议只认 basename，与旧 RecordRow imageSrc 逻辑一致）；导出 HTML 无 class，版式由容器 Tailwind arbitrary variant（`[&_p]:…`/`[&_img]:…`，rich-capture-preview.tsx:49）施加。
-- **document 三级兜底渲染 record.text**：document 为 null / JSON 损坏或 parseEditorState 抛错 / 导出 HTML 为空或纯空白 → 回退单个 `<p>`（rich-capture-preview.tsx:103）；收起 max-h-40+渐变遮罩、展开不限高行为保留，由父级 expanded 驱动。
+- **document 三级兜底渲染 record.text**：document 为 null / JSON 损坏或 parseEditorState 抛错 / 导出 HTML 为空或纯空白 → 回退单个 `<p>`（rich-capture-preview.tsx:103）；expanded 语义本期起仅供详情弹窗（固定传 true 全文），行内展开已随表格化移除。
+- **级别（grade）筛选走 `records.id IN (SELECT record_id FROM analyses WHERE grade = ?)` 子查询形态**：total 的 COUNT 在 records 单表执行（既有架构，analyses 列无法直接在 COUNT 里引用），WHERE 与 COUNT 共用同一 conditions/params 保证两侧语义一致；`grade = ?` 天然不匹配 NULL，无分级记录被筛选排除；不选 JOIN 后 HAVING/COUNT 重写——破坏既有 total/items 共用结构。
+- **详情弹窗直接用列表行 record 对象，不新增 IPC 查询**：列表 LEFT JOIN 已带全量字段（document/aiSummary/aiGrade），新增查询是多余 round trip；弹窗中记录被删（单删/批删）时在既有删除成功回调内 `setDetailId(null)` 同步关弹窗，不引入新订阅。
+- **级别徽标为纯展示 Tailwind 常量（high 红 / mid 中性实底 / low 描边灰），不进 tagColorMap 色板体系**：级别是固定三档语义色、非用户数据，与标签动态色体系正交；GradeBadge helper 单点渲染，表格级别列与弹窗元信息行复用同一逻辑。
 
 ## 技术债务
 

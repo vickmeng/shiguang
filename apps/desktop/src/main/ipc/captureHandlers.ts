@@ -22,8 +22,9 @@
  * 依次 analyzeCapture（@shiguang/ai，Kimi 多模态门卫 + 一句话摘要，输入为
  * written 相对路径）；!analysis.meaningful 或 summary.trim() 为空时抛
  * AI_NOT_MEANINGFUL_MESSAGE（渲染层据此区分 toast 文案）；否则
- * createCaptureWithAttachments 携 analysis: { summary, model: resolveKimiModel() }
- * 同事务写 analyses 表。try 块内任一步抛错（AI 断网/超时/无意义判定）均逐个
+ * createCaptureWithAttachments 携 analysis: { summary, model: resolveKimiModel(),
+ * grade } 同事务写 analyses 表（ai-record-grade：grade 为 AI 三档分级，
+ * AI 未返回时 grade: null 存 NULL，不阻塞入库）。try 块内任一步抛错（AI 断网/超时/无意义判定）均逐个
  * fs.rm(force) 清理已写图片后原样 rethrow——未入库不留孤儿文件。
  *
  * 复制链路（capture:copy-image）：按 id 经 getById 精确查记录
@@ -108,7 +109,12 @@ export function registerCaptureHandlers(): void {
         attachments: written,
         // 标签名快照原样透传，缺省 undefined 由 DAO 侧归一入库 '[]'
         tags: payload.tags,
-        analysis: { summary: analysis.summary, model: resolveKimiModel() },
+        // ai-record-grade：analysis 载荷携 grade（AI 未返回时存 NULL）
+        analysis: {
+          summary: analysis.summary,
+          model: resolveKimiModel(),
+          grade: analysis.grade ?? null,
+        },
       });
     } catch (err) {
       // 主进程日志留痕原始错误（渲染层 toast 只有固定/通用两档文案，无细节）；

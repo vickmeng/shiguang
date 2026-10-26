@@ -1,9 +1,11 @@
 /**
  * 记录页（任务 17/18/19）：骨架与列表渲染——
- * 挂载即分页查询（page=1/pageSize=20），每条渲染常驻复选框（勾选逻辑任务 22 接线）、
- * 多行截断预览（line-clamp-3）与本地时区格式化的存入时间；
+ * 挂载即分页查询（page=1/pageSize=20）；
  * 底部翻页控件按 total 计算页数，切换页码重新查询；
- * 点击记录行展开/折叠全文（expandedId 状态）；
+ * 列表表格化（ai-record-grade 任务 11）：<ul> 列表改 <table>，表头六列
+ * （选择/时间/摘要/级别/标签/操作），RecordRow 为 <tr> 行组件；
+ * 行内 expand 机制整体移除——点击摘要整格改开 RecordDetailDialog 只读详情弹窗
+ * （detailId 状态；删除命中当前详情记录时弹窗同步关闭）；
  * 筛选区（任务 19）：关键词搜索框（受控输入，变更即重置 page=1 重新查询）
  * + 时间快捷预设四选（全部/今天/最近7天/最近30天，本地时区起算），两维可组合；
  * 类型筛选已移除（2026-10-21）：记录均为图文混排形态，全部/文字/图片三选无意义，
@@ -38,17 +40,23 @@
  * 标签筛选（任务 18）：筛选区挂 TagSelect（allowCreate=false 只选已有、
  *   allowDelete=false 不渲染下拉 × 防误触直删库，Enter 无候选即忽略）——
  *   挂载时 tags:list 拉标签库 tagLib，并派生 tagColorMap
- * （name→color，传给 RecordRow 供 chips 配色，任务 19 消费）；选中写入表单 tags 字段
- * 并重置 page=1；payload 在 filters.tags 非空时带 tagNames（后端任一命中 OR），
- * 与关键词/时间同表单组合；空状态判断增 filters.tags.length > 0。
+ * （name→color，传给 RecordRow/RecordDetailDialog 供 chips 配色）；
+ * 选中写入表单 tags 字段并重置 page=1；payload 在 filters.tags 非空时带
+ * tagNames（后端任一命中 OR），与关键词/时间同表单组合；空状态判断增
+ * filters.tags.length > 0；
+ * 级别筛选（ai-record-grade 任务 11）：TagSelect 之后插入三档下拉
+ * （全部/high/mid/low），选中写入表单 grade 字段并重置 page=1，
+ * payload 在 filters.grade 非空时带 grade（仅匹配 analyses.grade 非 NULL 记录）；
+ * 空状态判断增 filters.grade !== ''。
  */
 import * as React from 'react';
-import type { QueryCapturesPayload, QueryCapturesResult, Tag } from '@shiguang/shared';
+import type { Grade, QueryCapturesPayload, QueryCapturesResult, Tag } from '@shiguang/shared';
 import { useForm, useStore } from '@tanstack/react-form';
 import { Toaster } from '../../components/ui/toast';
 import { ConfirmDialog } from '../../components/ui/dialog';
 import { RangeTimePicker, type RangeValue } from '../../components/ui/range-time-picker';
 import { TagSelect } from '../../components/ui/tag-select';
+import { RecordDetailDialog } from './record-detail-dialog';
 import { RecordRow } from './RecordRow';
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -104,14 +112,19 @@ export function RecordsPage() {
   const [pageSize, setPageSize] = React.useState(20);
   const [result, setResult] = React.useState<QueryCapturesResult>({ items: [], total: 0 });
   const [loading, setLoading] = React.useState(true);
-  // 展开/折叠全文：保存当前展开行的 id，null 表示全部折叠
-  const [expandedId, setExpandedId] = React.useState<number | null>(null);
-  // 筛选表单（任务 31）：keyword + 时间区间，TanStack Form 驱动（同 capture-form 引擎）
+  // 详情弹窗（表格化接线）：保存当前打开详情的记录 id，null 表示关闭
+  const [detailId, setDetailId] = React.useState<number | null>(null);
+  // 弹窗数据直接用当前列表行的 record 对象（列表 LEFT JOIN 已带全量字段），不新增 IPC 查询
+  const detailRecord = detailId === null
+    ? null
+    : result.items.find((item) => item.id === detailId) ?? null;
+  // 筛选表单（任务 31）：keyword + 时间区间 + 标签 + 级别，TanStack Form 驱动（同 capture-form 引擎）
   const form = useForm({
     defaultValues: {
       keyword: '',
       range: {} as RangeValue,
       tags: [] as string[],
+      grade: '' as '' | Grade,
     },
   });
   // 表单值为筛选 payload 唯一来源：订阅 store values，变更即触发下方 effect 重查
@@ -151,6 +164,8 @@ export function RecordsPage() {
     if (filters.range.to) payload.until = localDateTimeToISO(filters.range.to);
     // 标签筛选（任务 18）：非空时带 tagNames（后端任一命中 OR），空数组/缺省不过滤
     if (filters.tags.length > 0) payload.tagNames = filters.tags;
+    // 级别筛选（任务 11）：非空时带 grade 单值过滤（仅匹配 analyses.grade 非 NULL 记录）
+    if (filters.grade) payload.grade = filters.grade;
     void window.api.capture.list(payload).then((data) => {
       if (cancelled) return;
       setResult(data);
@@ -202,7 +217,7 @@ export function RecordsPage() {
       } else {
         setRefreshTick((tick) => tick + 1);
       }
-      if (expandedId === id) setExpandedId(null);
+      if (detailId === id) setDetailId(null);
     });
   };
 
@@ -223,7 +238,7 @@ export function RecordsPage() {
   const handleConfirmBatchDelete = () => {
     if (selectedIds.size === 0) return;
     // 先取选择集快照：下方 setSelectedIds(new Set()) 清空后，
-    // 闭包内仍需用本次勾选的集合做页回退与展开态清理判断，
+    // 闭包内仍需用本次勾选的集合做页回退与详情弹窗清理判断，
     // 避免「先 setState 后用旧值判断」的顺序敏感写法
     const selected = selectedIds;
     const ids = Array.from(selected);
@@ -236,7 +251,7 @@ export function RecordsPage() {
       } else {
         setRefreshTick((tick) => tick + 1);
       }
-      if (expandedId !== null && selected.has(expandedId)) setExpandedId(null);
+      if (detailId !== null && selected.has(detailId)) setDetailId(null);
     });
   };
 
@@ -307,6 +322,22 @@ export function RecordsPage() {
           onDeleteTag={(tag) => void window.api.tags.delete({ id: tag.id }).then(loadTagLib)}
           aria-label="筛选标签"
         />
+        {/* 级别筛选（任务 11）：三档单值下拉（全部/high/mid/low），
+            选中写表单 grade 字段并重置 page=1，与关键词/时间/标签同表单组合 */}
+        <select
+          aria-label="筛选级别"
+          value={filters.grade}
+          onChange={(e) => {
+            form.setFieldValue('grade', e.target.value as '' | Grade);
+            setPage(1);
+          }}
+          className="rounded-md border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-neutral-400"
+        >
+          <option value="">全部</option>
+          <option value="high">高</option>
+          <option value="mid">中</option>
+          <option value="low">低</option>
+        </select>
       </div>
       {/* 时间区间选择（任务 30/31）：平铺 always 可见；受控字段组件，值唯一来源为表单 */}
       <form.Field name="range">
@@ -336,7 +367,7 @@ export function RecordsPage() {
       ) : null}
       {/* 空状态（任务 23）：空库显示入库引导，有筛选但无结果显示调整筛选引导（条件取表单值） */}
       {!loading && result.total === 0 ? (
-        filters.keyword !== '' || rangeInUse || filters.tags.length > 0 ? (
+        filters.keyword !== '' || rangeInUse || filters.tags.length > 0 || filters.grade !== '' ? (
           <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-neutral-200 bg-white px-6 py-12 text-center">
             <p className="text-sm font-medium text-neutral-600">没有找到匹配的记录</p>
             <p className="text-xs text-neutral-400">试试调整关键词或时间范围</p>
@@ -349,20 +380,31 @@ export function RecordsPage() {
         )
       ) : null}
       {result.items.length > 0 ? (
-      <ul className="flex flex-col divide-y divide-neutral-200 rounded-md border border-neutral-200 bg-white">
+      <table className="w-full text-sm">
+        <thead>
+          <tr>
+            <th aria-label="选择" className="p-3 text-left text-xs font-medium text-neutral-400" />
+            <th className="p-3 text-left text-xs font-medium text-neutral-400 whitespace-nowrap">时间</th>
+            <th className="p-3 text-left text-xs font-medium text-neutral-400">摘要</th>
+            <th className="p-3 text-left text-xs font-medium text-neutral-400">级别</th>
+            <th className="p-3 text-left text-xs font-medium text-neutral-400">标签</th>
+            <th className="p-3 text-left text-xs font-medium text-neutral-400 w-24">操作</th>
+          </tr>
+        </thead>
+        <tbody>
         {result.items.map((item) => (
           <RecordRow
             key={item.id}
             record={item}
-            expanded={expandedId === item.id}
             selected={selectedIds.has(item.id)}
-            onToggleExpand={() => setExpandedId((cur) => (cur === item.id ? null : item.id))}
+            onOpenDetail={() => setDetailId(item.id)}
             onToggleSelect={() => toggleSelected(item.id)}
             onDelete={() => setDeletingId(item.id)}
             tagColors={tagColorMap}
           />
         ))}
-      </ul>
+        </tbody>
+      </table>
       ) : null}
       {loading ? <p className="text-sm text-neutral-400">加载中…</p> : null}
       <div className="flex items-center gap-3 text-sm text-neutral-500">
@@ -427,6 +469,13 @@ export function RecordsPage() {
         confirmVariant="destructive"
         onConfirm={handleConfirmBatchDelete}
         onCancel={() => setBatchDeleteOpen(false)}
+      />
+      {/* 记录详情弹窗（任务 11）：点摘要整格打开，只读全文；删除命中当前详情记录时已置 null 关闭 */}
+      <RecordDetailDialog
+        open={detailRecord !== null}
+        record={detailRecord}
+        tagColors={tagColorMap}
+        onClose={() => setDetailId(null)}
       />
     </div>
   );
