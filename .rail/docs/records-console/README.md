@@ -24,9 +24,8 @@
 
 ## 技术债务
 
-- [ ] LIKE 包含匹配在超大库（数万条以上）下可能变慢——keyword 与标签筛选（records.tags 快照列，无法走索引）均为 LIKE 全表扫（影响：高频使用数月后搜索/筛选卡顿；缓解：每页分页限制 + 索引扫，真出现卡顿再上 FTS5，对 DAO 接口透明）
-- [ ] `listCaptures` 与 `queryCaptures` 并存（影响：DAO 接口面冗余；取舍：前者服务无筛选整表场景与 M1 既有测试，m4-graphic-capture 确认本次不收敛）
-- [ ] `capture:copy-image` 按 id 取单条记录走 `queryCaptures` 全量拉取（pageSize=MAX_SAFE_INTEGER）后 find——DAO 缺 getById 接口，记录量大后每次复制扫全表；DAO 补单条查询时顺手收敛
+- [ ] LIKE 包含匹配在超大库（数万条以上）下可能变慢——keyword 与标签筛选（records.tags 快照列，无法走索引）均为 LIKE 全表扫，且 items SELECT 已叠加 attachments + analyses 双 LEFT JOIN（影响：高频使用数月后搜索/筛选卡顿；缓解：每页分页限制 + 索引扫，analyses 为 1:1 不引入行膨胀，真出现卡顿再上 FTS5，对 DAO 接口透明）
+- [ ] `listCaptures` 与 `queryCaptures` 并存，ai-record-summary 又新增 `getById`——三接口并存（影响：DAO 接口面冗余；取舍：getById 系偿还 copy-image 全表扫描的增量收敛，统一治理待存储迭代）
 - [ ] 删除无软删除/回收站，二次确认弹窗为唯一兜底（取舍：产品已对齐；未来导出迭代前如有需要再评估）
 - [ ] `documentToHtml` 内 root.type 兼容 shim 约 3 行（rich-capture-preview.tsx:70）：官方 parseEditorState 要求 root 带 `type:"root"`，缺该字段被静默吞成空文档；为不动 RecordRow/RecordsPage 既有测试的手写极简 fixture 而加。偿还：把这些 fixture 改为真实 EditorState 构造（参考 rich-capture-preview.test.tsx 写法）后可删 shim
 - [ ] 录入端图片行内插入未改：capture-form `$insertNodes` 仍可能产生图文同段落 document。展示端已能忠实渲染该形态，无用户可见问题；但 records.text（getTextContent）不携带图文相对位置信息，若将来依赖纯文本重建混排需重估

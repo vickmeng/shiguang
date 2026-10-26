@@ -16,6 +16,7 @@ function makeTextRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
     createdAt: '2024-05-01T08:30:00.000Z',
     imagePaths: [],
     tags: [],
+    aiSummary: null,
     ...overrides,
   };
 }
@@ -37,6 +38,7 @@ function makeImageRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord 
     createdAt: '2024-05-01T08:30:00.000Z',
     imagePaths: ['images/abc-uuid.png'],
     tags: [],
+    aiSummary: null,
     ...overrides,
   };
 }
@@ -216,5 +218,36 @@ describe('RecordRow 记录行', () => {
     const chip = screen.getByText('工作');
     expect(chip.style.backgroundColor).toBe('rgb(212, 212, 212)');
     expect(chip.style.color).toBe('rgb(255, 255, 255)');
+  });
+
+  it('aiSummary 非空时渲染「AI 摘要：xxx」，且位于预览内容与时间戳之间', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({ aiSummary: '这是一句摘要' }),
+    });
+    const summaryEl = screen.getByText('AI 摘要：这是一句摘要');
+    expect(summaryEl.className).toContain('text-xs');
+
+    // textContent 顺序断言：预览内容 → AI 摘要 → 时间戳
+    const content = container.querySelector('.min-w-0') as HTMLElement;
+    const text = content.textContent ?? '';
+    const previewIdx = text.indexOf('一条文字记录');
+    const summaryIdx = text.indexOf('AI 摘要：这是一句摘要');
+    const timeIdx = text.indexOf('2024');
+    expect(previewIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(previewIdx);
+    expect(timeIdx).toBeGreaterThan(summaryIdx);
+  });
+
+  it('aiSummary 为 null/undefined 时不渲染摘要行', () => {
+    const { container: nullContainer } = renderRow({
+      record: makeTextRecord({ aiSummary: null }),
+    });
+    expect(nullContainer.textContent).not.toContain('AI 摘要');
+    cleanup();
+
+    const { aiSummary: _omit, ...withoutSummary } = makeImageRecord();
+    void _omit;
+    const { container: undefContainer } = renderRow({ record: withoutSummary });
+    expect(undefContainer.textContent).not.toContain('AI 摘要');
   });
 });

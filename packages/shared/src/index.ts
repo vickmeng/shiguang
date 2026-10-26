@@ -18,6 +18,8 @@ export interface CaptureRecord {
   imagePaths: string[];
   /** 标签名快照数组，损坏降级 [] */
   tags: string[];
+  /** AI 一句话摘要（analyses.summary）；无摘要的存量记录为 null/undefined */
+  aiSummary?: string | null;
 }
 
 /** 标签条目；color 为创建时从 TAG_COLOR_PALETTE 随机取值的 hex */
@@ -130,3 +132,6 @@ export interface DeleteTagPayload {
 export interface SetLastTagsPayload {
   names: string[];
 }
+
+/** capture:create 无意义判定时主进程抛出的固定错误文案；渲染层据此区分 toast 文案 */
+export const AI_NOT_MEANINGFUL_MESSAGE = '内容未拾光：AI 判定无有效信息';

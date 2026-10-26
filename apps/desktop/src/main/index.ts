@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config as loadEnv } from 'dotenv';
 import { app } from 'electron';
-import { initDatabase, setCaptureDatabase, setTagDatabase } from '@shiguang/ai';
+import { initDatabase, setAnalysisImagesBaseDir, setCaptureDatabase, setTagDatabase } from '@shiguang/ai';
 import { createPetWindow } from './windows/petWindow';
 import { createInputWindow } from './windows/inputWindow';
 import { createTray } from './tray';
@@ -42,6 +42,10 @@ const dbPath = path.join(app.getPath('userData'), 'shiguang.db');
 const db = initDatabase(dbPath);
 setCaptureDatabase(db);
 setTagDatabase(db);
+
+// analyzeCapture 依赖相对 filePath 的 base 目录（writeImageFiles 落盘相对路径）；
+// 与库同根注入 userData，缺此注入 analyzeCapture 会抛「images base dir not initialized」。
+setAnalysisImagesBaseDir(path.join(app.getPath('userData')));
 
 // 3. app ready 后装配 M1 窗口：
 // 图片协议（须早于窗口创建，渲染端 <img> 才能走 shiguang-image://）

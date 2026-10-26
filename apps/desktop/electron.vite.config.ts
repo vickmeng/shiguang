@@ -12,7 +12,9 @@ export default defineConfig({
       },
       rollupOptions: {
         // 原生模块不打包，保留运行时 require；ABI 由 @electron/rebuild postinstall 对齐
-        external: ['better-sqlite3'],
+        // ws：@mastra/core 的传递依赖，打进 bundle 会触发其 bufferutil/utf-8-validate
+        // 可选 peer 的构建期解析抛错（App threw an error during load），外置 + 直连依赖声明
+        external: ['better-sqlite3', 'ws'],
       },
     },
   },

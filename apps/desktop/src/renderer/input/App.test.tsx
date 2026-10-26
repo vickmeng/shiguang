@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ShiguangApi } from '../../preload';
+import { toast } from '../components/ui/toast';
 import { App } from './App';
 
 function createApiMock(): ShiguangApi {
@@ -61,5 +62,17 @@ describe('App 输入框窗口', () => {
     await user.click(screen.getByRole('button', { name: '打开后台' }));
 
     expect(api.console.open).toHaveBeenCalledTimes(1);
+  });
+
+  it('根部挂载 Toaster：toast() 推送后渲染提示容器', () => {
+    const api = createApiMock();
+    window.api = api;
+    render(<App />);
+
+    act(() => {
+      toast('提示内容');
+    });
+
+    expect(screen.getByRole('status').textContent).toBe('提示内容');
   });
 });

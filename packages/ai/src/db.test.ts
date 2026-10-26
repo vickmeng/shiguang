@@ -8,6 +8,7 @@ import { migration } from './migrations/0001_init';
 import { migration as attachmentMigration } from './migrations/0002_attachment';
 import { migration as dropTypeMigration } from './migrations/0003_drop_type';
 import { migration as tagsMigration } from './migrations/0004_tags';
+import { migration as analysesMigration } from './migrations/0005_analyses';
 
 describe('initDatabase', () => {
   let tmpDir: string;
@@ -78,7 +79,7 @@ describe('initDatabase', () => {
       .prepare('SELECT name FROM _migrations ORDER BY name')
       .all()
       .map((row) => (row as { name: string }).name);
-    expect(logged).toEqual(['0001_init', '0002_attachment', '0003_drop_type', '0004_tags']);
+    expect(logged).toEqual(['0001_init', '0002_attachment', '0003_drop_type', '0004_tags', '0005_analyses']);
 
     db2.close();
   });
@@ -302,6 +303,106 @@ describe('迁移 0004_tags', () => {
     expect(recordCols.map((c) => c.name)).not.toContain('tags');
 
     // records 数据不受 down 影响
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
+    ).toBe(1);
+
+    db.close();
+  });
+});
+
+describe('迁移 0005_analyses', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-migration-0005-test-'));
+    dbPath = join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('迁移后 analyses 表含 record_id/summary/model/created_at 四列，summary、model 为 NOT NULL，record_id 为 PK 且 FK 指向 records(id) 级联删除', () => {
+    const db = initDatabase(dbPath);
+
+    const cols = db
+      .prepare('PRAGMA table_info(analyses)')
+      .all() as unknown as Array<{ name: string; notnull: number; pk: number }>;
+    expect(cols.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['record_id', 'summary', 'model', 'created_at']),
+    );
+    expect(cols.find((c) => c.name === 'summary')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'model')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'record_id')?.pk).toBe(1);
+
+    const fks = db
+      .prepare('PRAGMA foreign_key_list(analyses)')
+      .all() as unknown as Array<{ table: string; from: string; to: string; on_delete: string }>;
+    const recordFk = fks.find((fk) => fk.from === 'record_id');
+    expect(recordFk).toBeDefined();
+    expect(recordFk!.table).toBe('records');
+    expect(recordFk!.to).toBe('id');
+    expect(recordFk!.on_delete).toBe('CASCADE');
+
+    db.close();
+  });
+
+  it('旧库（0004 态已有记录行）升级后现有记录不受影响（无摘要、行数不变）', () => {
+    // 手工构造仅应用 0001~0004 的"旧库"并写入记录行
+    const oldDb = new Database(dbPath);
+    oldDb.pragma('foreign_keys = ON');
+    void migration.up({ context: oldDb });
+    void attachmentMigration.up({ context: oldDb });
+    void dropTypeMigration.up({ context: oldDb });
+    void tagsMigration.up({ context: oldDb });
+    oldDb.prepare(`INSERT INTO records (text) VALUES ('旧记录')`).run();
+    oldDb.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(migration.name);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(attachmentMigration.name);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(dropTypeMigration.name);
+    oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(tagsMigration.name);
+    oldDb.close();
+
+    // 再次 initDatabase：应跳过 0001~0004、仅应用 0005
+    const db = initDatabase(dbPath);
+
+    const analysesTables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'analyses'")
+      .all();
+    expect(analysesTables).toHaveLength(1);
+
+    const oldRow = db.prepare(`SELECT text FROM records WHERE text = '旧记录'`).get() as {
+      text: string;
+    };
+    expect(oldRow.text).toBe('旧记录');
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
+    ).toBe(1);
+
+    db.close();
+  });
+
+  it('migration.down() 后 analyses 表消失，records 数据不受影响', async () => {
+    const db = initDatabase(dbPath);
+    db.prepare(`INSERT INTO records (text) VALUES ('带摘要的记录')`).run();
+    const recordId = Number(
+      (db.prepare(`SELECT id FROM records WHERE text = '带摘要的记录'`).get() as { id: number }).id,
+    );
+    db.prepare(`INSERT INTO analyses (record_id, summary, model) VALUES (?, ?, ?)`).run(
+      recordId,
+      '一句话摘要',
+      'kimi-k2.6',
+    );
+
+    await analysesMigration.down({ context: db });
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'analyses'")
+      .all();
+    expect(tables).toEqual([]);
+
     expect(
       (db.prepare(`SELECT COUNT(*) AS count FROM records`).get() as { count: number }).count,
     ).toBe(1);

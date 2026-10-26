@@ -18,9 +18,19 @@
  * payload.tags（标签名快照）原样转发，缺省 undefined 由 DAO 侧归一入库 '[]'；
  * 写盘抛错时 invoke 被拒绝，渲染侧 catch 提示。
  *
- * 复制链路（capture:copy-image）：按 id 经 queryCaptures 查记录 →
- * imagePaths.length === 0 抛 Error('该记录不是图片')（不存在 id 同样落入
- * 此分支；多图记录恒复制首图 imagePaths[0]）→
+ * AI 分析编排（ai-record-summary）：writeImageFiles 落盘成功后进入 try 块——
+ * 依次 analyzeCapture（@shiguang/ai，Kimi 多模态门卫 + 一句话摘要，输入为
+ * written 相对路径）；!analysis.meaningful 或 summary.trim() 为空时抛
+ * AI_NOT_MEANINGFUL_MESSAGE（渲染层据此区分 toast 文案）；否则
+ * createCaptureWithAttachments 携 analysis: { summary, model: resolveKimiModel() }
+ * 同事务写 analyses 表。try 块内任一步抛错（AI 断网/超时/无意义判定）均逐个
+ * fs.rm(force) 清理已写图片后原样 rethrow——未入库不留孤儿文件。
+ *
+ * 复制链路（capture:copy-image）：按 id 经 getById 精确查记录
+ * （ai-record-summary 任务 8，偿还 .rail/docs/records-console/README.md
+ * 技术债务第 3 条，不再扫全表 queryCaptures.find）→
+ * imagePaths.length === 0 抛 Error('该记录不是图片')（getById 返回 null
+ * 同样落入此分支；多图记录恒复制首图 imagePaths[0]）→
  * nativeImage.createFromPath(userData/imagePaths[0]) → isEmpty() 抛
  * Error('图片文件缺失或损坏') → 否则 clipboard.write([ClipboardItem])（Electron 44
  * 起剪贴板为 W3C 异步 API，旧 writeImage 已移除）。
@@ -30,12 +40,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, clipboard, ClipboardItem, ipcMain, nativeImage } from 'electron';
 import {
+  analyzeCapture,
   createCaptureWithAttachments,
   queryCaptures,
   deleteCaptures,
+  getById,
+  resolveKimiModel,
 } from '@shiguang/ai';
 import { writeImageFiles } from '../screenshot/screenshotService';
-import { IPC } from '@shiguang/shared';
+import { AI_NOT_MEANINGFUL_MESSAGE, IPC } from '@shiguang/shared';
 import type {
   CopyImagePayload,
   CreateCapturePayload,
@@ -74,20 +87,41 @@ export function registerCaptureHandlers(): void {
   ipcMain.handle(IPC.captureCreate, async (_event, payload: CreateCapturePayload) => {
     const written = await writeImageFiles(payload.images.map((img) => img.data));
     const writtenPaths = written.map((w) => w.filePath);
-    return createCaptureWithAttachments({
-      text: payload.text,
-      // design.md 决策 16：Lexical EditorState JSON 双写入 records.document 列。
-      // 渲染层 payload.document 可空，缺省归一为 null；非空时把 image 节点的
-      // blob: src 按序重写为 writeImageFiles 返回的相对路径，使入库 document 自包含。
-      document:
-        payload.document != null
-          ? rewriteImageSrcs(payload.document, writtenPaths)
-          : null,
-      sourceApp: null,
-      attachments: written,
-      // 标签名快照原样透传，缺省 undefined 由 DAO 侧归一入库 '[]'
-      tags: payload.tags,
-    });
+    try {
+      const analysis = await analyzeCapture({
+        text: payload.text,
+        images: written.map((w) => ({ filePath: w.filePath })),
+      });
+      if (!analysis.meaningful || !analysis.summary?.trim()) {
+        throw new Error(AI_NOT_MEANINGFUL_MESSAGE);
+      }
+      return createCaptureWithAttachments({
+        text: payload.text,
+        // design.md 决策 16：Lexical EditorState JSON 双写入 records.document 列。
+        // 渲染层 payload.document 可空，缺省归一为 null；非空时把 image 节点的
+        // blob: src 按序重写为 writeImageFiles 返回的相对路径，使入库 document 自包含。
+        document:
+          payload.document != null
+            ? rewriteImageSrcs(payload.document, writtenPaths)
+            : null,
+        sourceApp: null,
+        attachments: written,
+        // 标签名快照原样透传，缺省 undefined 由 DAO 侧归一入库 '[]'
+        tags: payload.tags,
+        analysis: { summary: analysis.summary, model: resolveKimiModel() },
+      });
+    } catch (err) {
+      // 主进程日志留痕原始错误（渲染层 toast 只有固定/通用两档文案，无细节）；
+      // 真机走查排查 AI 链路（key / 端点 / 超时）以此为第一现场。
+      console.error('[capture:create] 分析失败，本条不入库：', err);
+      // 分析失败/无意义判定：未入库，逐个清理已写图片（尽力清理，不掩盖原错误）
+      for (const w of written) {
+        await fs.promises
+          .rm(path.join(app.getPath('userData'), w.filePath), { force: true })
+          .catch(() => {});
+      }
+      throw err;
+    }
   });
   ipcMain.handle(IPC.captureList, (_event, payload: QueryCapturesPayload) =>
     queryCaptures(payload),
@@ -105,11 +139,7 @@ export function registerCaptureHandlers(): void {
     }
   });
   ipcMain.handle(IPC.captureCopyImage, async (_event, payload: CopyImagePayload) => {
-    const { items } = queryCaptures({
-      page: 1,
-      pageSize: Number.MAX_SAFE_INTEGER,
-    });
-    const rec = items.find((r) => r.id === payload.id);
+    const rec = getById(payload.id);
     if (!rec || rec.imagePaths.length === 0) {
       throw new Error('该记录不是图片');
     }

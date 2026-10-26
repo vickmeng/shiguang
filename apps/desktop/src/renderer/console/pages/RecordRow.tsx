@@ -12,6 +12,9 @@
  * （底色 = 标签色 + 名称），底色取父级下发的 tagColors（库内标签用库色），
  * 文字色经 tagTextColor 按底色亮度自动切换；tagColors 缺失该项名（已删标签）
  * 实心灰 #d4d4d4 + 白字。
+ * AI 摘要行挂载于 RichCapturePreview 之后、时间戳 <p> 之前：
+ * record.aiSummary 非空（字符串）时渲染「AI 摘要：xxx」文本行，
+ * null/undefined（无摘要的存量记录）不渲染该行。
  * 行结构自 RecordsPage 现行 li 平移，选中/展开/删除编排由父组件接线。
  */
 import * as React from 'react';
@@ -67,6 +70,10 @@ export function RecordRow({ record, expanded, selected, tagColors, onToggleExpan
           text={record.text}
           expanded={expanded}
         />
+        {record.aiSummary && (
+          /* AI 摘要：预览内容与时间戳之间；无摘要（null/undefined）不渲染 */
+          <p className="mt-1 text-xs text-neutral-400">AI 摘要：{record.aiSummary}</p>
+        )}
         <p className="mt-1 text-xs text-neutral-400">
           {new Date(record.createdAt).toLocaleString()}
         </p>

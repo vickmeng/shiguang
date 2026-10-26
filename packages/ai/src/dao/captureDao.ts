@@ -10,6 +10,10 @@ import type {
  *
  * DAO 函数契约为 (input) 形态（不含 db 参数），故连接以模块级单例方式注入：
  * 主进程启动时调用一次 setCaptureDatabase(initDatabase(dbPath))，之后 DAO 函数直接使用。
+ *
+ * 读取侧（listCaptures / queryCaptures / getById）共用 SELECT_RECORDS_JOIN 模板：
+ * records 行 + LEFT JOIN attachments（1:N，JS 侧聚合为有序 imagePaths）与
+ * LEFT JOIN analyses（record_id 主键 1:1，读回 aiSummary，无行膨胀）。
  */
 let db: Database.Database | null = null;
 
@@ -27,7 +31,21 @@ interface RecordRow {
   created_at: string;
   /** LEFT JOIN attachments 得到的相对路径，无附件行时为 null */
   image_path: string | null;
+  /** LEFT JOIN analyses 得到的 AI 一句话摘要，无摘要记录为 null */
+  ai_summary: string | null;
 }
+
+/**
+ * 读取侧共享 SELECT 模板：records 行 + attachments/analyses 两个 1:1/N 侧表
+ * LEFT JOIN。analyses 与 record_id 主键 1:1，不会引入行膨胀；attachments
+ * 为 1:N，多附件记录展开为多行，由 toRecords 按 record_id 聚合。
+ */
+const SELECT_RECORDS_JOIN = `
+  SELECT records.*, attachments.file_path AS image_path, analyses.summary AS ai_summary
+  FROM records
+  LEFT JOIN attachments ON attachments.record_id = records.id
+  LEFT JOIN analyses ON analyses.record_id = records.id
+`;
 
 /** attachments 表行结构（图片记录的附件元数据） */
 interface AttachmentRow {
@@ -68,6 +86,7 @@ function toRecord(row: RecordRow): CaptureRecord {
     tags: parseTags(row.tags),
     createdAt: row.created_at,
     imagePaths: row.image_path === null ? [] : [row.image_path],
+    aiSummary: row.ai_summary,
   };
 }
 
@@ -110,7 +129,7 @@ export function createCapture(
     .prepare(
       `INSERT INTO records (text, document, source_app, tags, created_at)
        VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       RETURNING *, NULL AS image_path`,
+       RETURNING *, NULL AS image_path, NULL AS ai_summary`,
     )
     .get(
       input.text,
@@ -127,11 +146,12 @@ export function createCapture(
  *
  * 单事务内先写 records 行（text/document/source_app，document 为 Lexical EditorState
  * JSON，缺省为 null），再按 input.attachments 数组顺序逐行写 attachments
- * （record_id 关联、file_path 为相对 userData 的路径、sizeBytes 缺省为 null）；
- * 任一步失败整体回滚，保证两表一致。
+ * （record_id 关联、file_path 为相对 userData 的路径、sizeBytes 缺省为 null），
+ * 最后可选写 analyses 行（AI 一句话摘要，record_id 主键与 records 行 1:1）；
+ * 任一步失败整体回滚，保证三表一致。
  *
  * @param input 记录内容（document/sourceApp 缺省为 null；tags 缺省 = 不打标；
- *   attachments 无图时传 []）
+ *   attachments 无图时传 []；analysis 缺省 = 不写 analyses 行）
  * @returns 已入库的记录（imagePaths 由 input.attachments 的 filePath 顺序组装）
  */
 export function createCaptureWithAttachments(input: {
@@ -140,6 +160,7 @@ export function createCaptureWithAttachments(input: {
   sourceApp?: string | null;
   tags?: string[];
   attachments: Array<{ filePath: string; sizeBytes?: number }>;
+  analysis?: { summary: string; model: string };
 }): CaptureRecord {
   const database = db;
   if (!database) {
@@ -158,7 +179,7 @@ export function createCaptureWithAttachments(input: {
         input.document ?? null,
         input.sourceApp ?? null,
         JSON.stringify(input.tags ?? []),
-      ) as unknown as Omit<RecordRow, 'image_path'>;
+      ) as unknown as Omit<RecordRow, 'image_path' | 'ai_summary'>;
 
     const insertAttachment = database.prepare(
       `INSERT INTO attachments (record_id, file_path, size_bytes, created_at)
@@ -168,7 +189,15 @@ export function createCaptureWithAttachments(input: {
       insertAttachment.run(row.id, attachment.filePath, attachment.sizeBytes ?? null);
     }
 
-    const record = toRecord({ ...row, image_path: null });
+    if (input.analysis) {
+      database
+        .prepare(
+          `INSERT INTO analyses (record_id, summary, model) VALUES (?, ?, ?)`,
+        )
+        .run(row.id, input.analysis.summary, input.analysis.model);
+    }
+
+    const record = toRecord({ ...row, image_path: null, ai_summary: null });
     record.tags = input.tags ?? [];
     record.imagePaths = input.attachments.map((attachment) => attachment.filePath);
     return record;
@@ -192,15 +221,11 @@ export function listCaptures(limit?: number): CaptureRecord[] {
   const selectRecords =
     limit === undefined
       ? db.prepare(
-          `SELECT records.*, attachments.file_path AS image_path
-           FROM records
-           LEFT JOIN attachments ON attachments.record_id = records.id
+          `${SELECT_RECORDS_JOIN}
            ORDER BY records.created_at DESC, records.id DESC, attachments.id ASC`,
         )
       : db.prepare(
-          `SELECT records.*, attachments.file_path AS image_path
-           FROM records
-           LEFT JOIN attachments ON attachments.record_id = records.id
+          `${SELECT_RECORDS_JOIN}
            ORDER BY records.created_at DESC, records.id DESC, attachments.id ASC LIMIT ?`,
         );
 
@@ -277,15 +302,39 @@ export function queryCaptures(
 
   const rows = db
     .prepare(
-      `SELECT records.*, attachments.file_path AS image_path
-       FROM records
-       LEFT JOIN attachments ON attachments.record_id = records.id
+      `${SELECT_RECORDS_JOIN}
        ${where} ORDER BY records.created_at DESC, records.id DESC, attachments.id ASC
        LIMIT ? OFFSET ?`,
     )
     .all(...params, input.pageSize, (input.page - 1) * input.pageSize) as unknown as RecordRow[];
 
   return { items: toRecords(rows), total };
+}
+
+/**
+ * 按 id 精确读取单条捕获记录（capture:copy-image 等单记录消费场景）。
+ *
+ * 走共享 SELECT 模板（records + LEFT JOIN attachments/analyses），命中时
+ * 返回完整 CaptureRecord（imagePaths 按 attachments.id 升序、aiSummary 为
+ * analyses.summary），未命中返回 null。
+ *
+ * @param id 记录 id
+ * @returns 完整记录；不存在时 null
+ */
+export function getById(id: number): CaptureRecord | null {
+  if (!db) {
+    throw new Error('capture database not initialized: call setCaptureDatabase first');
+  }
+
+  const rows = db
+    .prepare(
+      `${SELECT_RECORDS_JOIN}
+       WHERE records.id = ?
+       ORDER BY attachments.id ASC`,
+    )
+    .all(id) as unknown as RecordRow[];
+
+  return toRecords(rows)[0] ?? null;
 }
 
 /**

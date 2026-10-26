@@ -1,6 +1,7 @@
 /**
  * captureHandlers 单测：验证 `capture:create`（AC-1/AC-6，写盘与入库编排）
- * 与 `capture:copy-image`（AC-9，按 id 查记录并复制记录首图到剪贴板，
+ * 与 `capture:copy-image`（AC-9，ai-record-summary 任务 8 起按 id 经 getById
+ * 精确查记录并复制记录首图到剪贴板，不再扫全表 queryCaptures.find；
  * M4 起记录支持多图，恒复制 imagePaths[0]）。
  *
  * capture:create：payload.images 为 { data, sizeBytes }[]，handler 先
@@ -13,8 +14,16 @@
  * writeImageFiles 抛错时 createCaptureWithAttachments
  * 零调用且 invoke 拒绝。
  *
+ * AI 分析编排（ai-record-summary，AC-1/AC-2/AC-3）：writeImageFiles 落盘成功后
+ * 进入 try 块依次 analyzeCapture（@shiguang/ai，Kimi 多模态门卫+摘要）→
+ * 有意义判定（!analysis.meaningful 或 summary 空白）时抛
+ * AI_NOT_MEANINGFUL_MESSAGE → createCaptureWithAttachments 携
+ * analysis: { summary, model: resolveKimiModel() } 入库；try 块内任一步抛错
+ * 均逐个 fs.rm(force) 清理已写图片后原样 rethrow，DAO 零调用。
+ *
  * mock electron 的 ipcMain/nativeImage/clipboard/app 与 @shiguang/ai 的
- * queryCaptures（DAO 真行为由 captureDao.test.ts 覆盖），断言：
+ * getById（DAO 真行为由 captureDao.test.ts 覆盖；queryCaptures 仍由
+ * captureList 消费，断言 copy-image 零调用），断言：
  *  - 含图记录：nativeImage.createFromPath(userData/imagePaths[0]) → 非空 →
  *    clipboard.write（W3C ClipboardItem，image/png Blob）；
  *  - 多图记录：复制 imagePaths[0] 对应文件；
@@ -24,7 +33,7 @@
  */
 import path from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { IPC } from '@shiguang/shared';
+import { AI_NOT_MEANINGFUL_MESSAGE, IPC } from '@shiguang/shared';
 import type { CaptureRecord, CreateCapturePayload } from '@shiguang/shared';
 
 const USER_DATA = '/tmp/shiguang-userdata';
@@ -34,6 +43,11 @@ const { stubs, image } = vi.hoisted(() => {
   return {
     image,
     stubs: {
+      fs: {
+        // promises.rm 返回 Promise（handler 内 await 后 .catch 吞错）
+        promises: { rm: vi.fn(() => Promise.resolve()) },
+        rmSync: vi.fn(),
+      },
       ipcMain: {
         removeAllListeners: vi.fn(),
         on: vi.fn(),
@@ -50,10 +64,18 @@ const { stubs, image } = vi.hoisted(() => {
       },
       app: { getPath: vi.fn(() => USER_DATA) },
       queryCaptures: vi.fn(),
+      getById: vi.fn(),
       createCaptureWithAttachments: vi.fn(),
+      analyzeCapture: vi.fn(),
+      resolveKimiModel: vi.fn(),
     },
   };
 });
+
+vi.mock('node:fs', () => ({
+  default: stubs.fs,
+  rmSync: stubs.fs.rmSync,
+}));
 
 vi.mock('electron', () => ({
   ipcMain: stubs.ipcMain,
@@ -65,7 +87,10 @@ vi.mock('electron', () => ({
 vi.mock('@shiguang/ai', () => ({
   createCaptureWithAttachments: stubs.createCaptureWithAttachments,
   queryCaptures: stubs.queryCaptures,
+  getById: stubs.getById,
   deleteCaptures: vi.fn(() => []),
+  analyzeCapture: stubs.analyzeCapture,
+  resolveKimiModel: stubs.resolveKimiModel,
 }));
 
 vi.mock('../screenshot/screenshotService', () => ({
@@ -102,6 +127,9 @@ async function invokeCreate(payload: CreateCapturePayload): Promise<unknown> {
 describe('capture:create', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // AI 分析默认成功（既有用例聚焦写盘/入库编排，DAO 入参 analysis 另行断言）
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: '默认摘要' });
+    stubs.resolveKimiModel.mockReturnValue('kimi-k2.6');
   });
 
   it('携 2 图：writeImageFiles 先调用（提取 data 字节），written 原样进 createCaptureWithAttachments', async () => {
@@ -134,6 +162,7 @@ describe('capture:create', () => {
       sourceApp: null,
       attachments: written,
       tags,
+      analysis: { summary: '默认摘要', model: 'kimi-k2.6' },
     });
     expect(vi.mocked(writeImageFiles).mock.invocationCallOrder[0]).toBeLessThan(
       stubs.createCaptureWithAttachments.mock.invocationCallOrder[0],
@@ -217,6 +246,7 @@ describe('capture:create', () => {
       document,
       sourceApp: null,
       attachments: [],
+      analysis: { summary: '默认摘要', model: 'kimi-k2.6' },
     });
   });
 
@@ -256,6 +286,92 @@ describe('capture:create', () => {
   });
 });
 
+describe('capture:create AI 分析编排', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stubs.resolveKimiModel.mockReturnValue('kimi-k2.6');
+  });
+
+  const written = [
+    { filePath: 'images/a.png', sizeBytes: 3 },
+    { filePath: 'images/b.png', sizeBytes: 2 },
+  ];
+  const payload: CreateCapturePayload = {
+    text: '图文混排',
+    document: null,
+    images: [
+      { data: new Uint8Array([1]), sizeBytes: 3 },
+      { data: new Uint8Array([2]), sizeBytes: 2 },
+    ],
+  };
+
+  it('成功路径：writeImageFiles → analyzeCapture → createCaptureWithAttachments 按序调用，DAO 入参携带 analysis: { summary, model }，不触发图片清理', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: '一句话摘要' });
+    stubs.createCaptureWithAttachments.mockResolvedValue(record({ id: 10 }));
+
+    await invokeCreate(payload);
+
+    expect(stubs.analyzeCapture).toHaveBeenCalledWith({
+      text: '图文混排',
+      images: [{ filePath: 'images/a.png' }, { filePath: 'images/b.png' }],
+    });
+    expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        analysis: { summary: '一句话摘要', model: 'kimi-k2.6' },
+      }),
+    );
+    const orderWrite = vi.mocked(writeImageFiles).mock.invocationCallOrder[0];
+    const orderAnalyze = stubs.analyzeCapture.mock.invocationCallOrder[0];
+    const orderDao = stubs.createCaptureWithAttachments.mock.invocationCallOrder[0];
+    expect(orderWrite).toBeLessThan(orderAnalyze);
+    expect(orderAnalyze).toBeLessThan(orderDao);
+    // 成功路径不触发清理
+    expect(stubs.fs.promises.rm).not.toHaveBeenCalled();
+  });
+
+  it('meaningful=false：invoke 以 AI_NOT_MEANINGFUL_MESSAGE 拒绝，已写图片逐个 fs.rm 清理，DAO 零调用', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: false });
+
+    await expect(invokeCreate(payload)).rejects.toThrow(AI_NOT_MEANINGFUL_MESSAGE);
+    await expect(Promise.reject(new Error(AI_NOT_MEANINGFUL_MESSAGE))).rejects.toThrow(
+      '内容未拾光',
+    );
+
+    expect(stubs.createCaptureWithAttachments).not.toHaveBeenCalled();
+    expect(stubs.fs.promises.rm).toHaveBeenCalledTimes(2);
+    expect(stubs.fs.promises.rm).toHaveBeenCalledWith(path.join(USER_DATA, 'images/a.png'), {
+      force: true,
+    });
+    expect(stubs.fs.promises.rm).toHaveBeenCalledWith(path.join(USER_DATA, 'images/b.png'), {
+      force: true,
+    });
+  });
+
+  it('meaningful=true 但 summary 为空白：同样按无意义拒绝并清理', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: '   ' });
+
+    await expect(invokeCreate(payload)).rejects.toThrow(AI_NOT_MEANINGFUL_MESSAGE);
+    expect(stubs.createCaptureWithAttachments).not.toHaveBeenCalled();
+    expect(stubs.fs.promises.rm).toHaveBeenCalledTimes(2);
+  });
+
+  it('analyzeCapture 抛错（模拟断网/超时）：清理图片后原样 reject，DAO 零调用', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.analyzeCapture.mockRejectedValue(new Error('网络超时'));
+
+    await expect(invokeCreate(payload)).rejects.toThrow('网络超时');
+
+    expect(stubs.createCaptureWithAttachments).not.toHaveBeenCalled();
+    expect(stubs.fs.promises.rm).toHaveBeenCalledTimes(2);
+    expect(stubs.fs.promises.rm).toHaveBeenCalledWith(path.join(USER_DATA, 'images/a.png'), {
+      force: true,
+    });
+  });
+});
+
 /** 取出 capture:copy-image 的 invoke handler 并以其返回值/拒绝做断言。 */
 async function invokeCopyImage(id: number): Promise<unknown> {
   registerCaptureHandlers();
@@ -270,17 +386,13 @@ describe('capture:copy-image', () => {
     image.isEmpty.mockReturnValue(false);
   });
 
-  it('含图记录：createFromPath(userData/imagePaths[0]) 且 clipboard.write', async () => {
-    stubs.queryCaptures.mockReturnValue({
-      items: [record({ id: 7, imagePaths: ['images/a.png'] })],
-      total: 1,
-    });
+  it('含图记录：getById(id) 命中 → createFromPath(userData/imagePaths[0]) 且 clipboard.write，零调用 queryCaptures', async () => {
+    stubs.getById.mockReturnValue(record({ id: 7, imagePaths: ['images/a.png'] }));
 
     await invokeCopyImage(7);
 
-    expect(stubs.queryCaptures).toHaveBeenCalledWith(
-      expect.objectContaining({ page: 1 }),
-    );
+    expect(stubs.getById).toHaveBeenCalledWith(7);
+    expect(stubs.queryCaptures).not.toHaveBeenCalled();
     expect(stubs.nativeImage.createFromPath).toHaveBeenCalledWith(
       path.join(USER_DATA, 'images', 'a.png'),
     );
@@ -289,11 +401,10 @@ describe('capture:copy-image', () => {
     expect(stubs.clipboard.write).toHaveBeenCalledTimes(1);
   });
 
-  it('多图记录：复制 imagePaths[0] 对应文件', async () => {
-    stubs.queryCaptures.mockReturnValue({
-      items: [record({ id: 8, imagePaths: ['images/first.png', 'images/second.png'] })],
-      total: 1,
-    });
+  it('多图记录：复制 imagePaths[0] 对应文件，零调用 queryCaptures', async () => {
+    stubs.getById.mockReturnValue(
+      record({ id: 8, imagePaths: ['images/first.png', 'images/second.png'] }),
+    );
 
     await invokeCopyImage(8);
 
@@ -302,21 +413,19 @@ describe('capture:copy-image', () => {
       path.join(USER_DATA, 'images', 'first.png'),
     );
     expect(stubs.clipboard.write).toHaveBeenCalledTimes(1);
+    expect(stubs.queryCaptures).not.toHaveBeenCalled();
   });
 
   it('无图记录（imagePaths: []）：invoke 被 Error("该记录不是图片") 拒绝', async () => {
-    stubs.queryCaptures.mockReturnValue({
-      items: [record({ id: 3, text: 'hello' })],
-      total: 1,
-    });
+    stubs.getById.mockReturnValue(record({ id: 3, text: 'hello' }));
 
     await expect(invokeCopyImage(3)).rejects.toThrow('该记录不是图片');
     expect(stubs.nativeImage.createFromPath).not.toHaveBeenCalled();
     expect(stubs.clipboard.write).not.toHaveBeenCalled();
   });
 
-  it('不存在的记录 id：invoke 被拒绝（该记录不是图片）', async () => {
-    stubs.queryCaptures.mockReturnValue({ items: [], total: 0 });
+  it('不存在的记录 id（getById 返回 null）：invoke 被拒绝（该记录不是图片）', async () => {
+    stubs.getById.mockReturnValue(null);
 
     await expect(invokeCopyImage(999)).rejects.toThrow('该记录不是图片');
     expect(stubs.nativeImage.createFromPath).not.toHaveBeenCalled();
@@ -324,10 +433,7 @@ describe('capture:copy-image', () => {
   });
 
   it('图片文件缺失或损坏（isEmpty()）：invoke 被 Error("图片文件缺失或损坏") 拒绝', async () => {
-    stubs.queryCaptures.mockReturnValue({
-      items: [record({ id: 9, imagePaths: ['images/gone.png'] })],
-      total: 1,
-    });
+    stubs.getById.mockReturnValue(record({ id: 9, imagePaths: ['images/gone.png'] }));
     image.isEmpty.mockReturnValue(true);
 
     await expect(invokeCopyImage(9)).rejects.toThrow('图片文件缺失或损坏');

@@ -17,6 +17,8 @@ import {
   type LexicalEditor,
 } from 'lexical';
 import type { ShiguangApi } from '../../../../preload';
+import { AI_NOT_MEANINGFUL_MESSAGE } from '@shiguang/shared';
+import { Toaster } from '../../../components/ui/toast';
 import { CaptureForm, CaptureFormInner } from './capture-form';
 import { $createImageNode, ImageNode } from './image-node';
 
@@ -677,6 +679,90 @@ describe('CaptureForm 提交编排（任务 18：图文 payload 与清空/revoke
 
     unmount();
     expect(revoke).toHaveBeenCalledWith('blob:mock-1');
+  });
+});
+
+describe('CaptureForm 失败 toast 区分（任务 10：AI 无意义文案）', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /** 表单外额外挂载 Toaster，使 toast() 推送可被断言 */
+  function renderInnerWithToaster(): { current: LexicalEditor | null } {
+    const editorRef = renderInner();
+    render(<Toaster />);
+    return editorRef;
+  }
+
+  it('提交中按钮显示「拾光中…」且禁用，resolve 后闪现「✓ 已拾光」且无 toast', async () => {
+    let resolveCreate!: (value: unknown) => void;
+    const api = createApiMock();
+    api.capture.create = vi.fn(
+      () =>
+        new Promise((res) => {
+          resolveCreate = res;
+        }),
+    ) as unknown as ShiguangApi['capture']['create'];
+    window.api = api;
+    const editorRef = renderInnerWithToaster();
+    const editor = editorRef.current!;
+
+    setEditorText(editor, 'hello');
+    const submit = screen.getByRole('button', { name: /拾光/ });
+    fireEvent.click(submit);
+
+    // loading 终点 = 入库 + AI 分析完成（主进程串行编排），期间按钮禁用
+    expect(submit.textContent).toBe('拾光中…');
+    expect(submit).toHaveProperty('disabled', true);
+
+    await act(async () => {
+      resolveCreate({
+        id: 1,
+        text: 'hello',
+        imagePaths: [],
+        sourceApp: null,
+        createdAt: new Date().toISOString(),
+      });
+    });
+
+    expect(await screen.findByText('✓ 已拾光')).toBeTruthy();
+    // 成功路径不加 toast
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('reject 且 err.message 为 AI_NOT_MEANINGFUL_MESSAGE：按钮闪现「提交失败」且 toast 固定文案', async () => {
+    const api = createApiMock();
+    api.capture.create = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(AI_NOT_MEANINGFUL_MESSAGE),
+      ) as unknown as ShiguangApi['capture']['create'];
+    window.api = api;
+    const editorRef = renderInnerWithToaster();
+    const editor = editorRef.current!;
+
+    setEditorText(editor, '乱敲内容');
+    fireEvent.click(screen.getByRole('button', { name: /拾光/ }));
+
+    expect(await screen.findByText('提交失败')).toBeTruthy();
+    expect(await screen.findByText(AI_NOT_MEANINGFUL_MESSAGE)).toBeTruthy();
+  });
+
+  it('reject 其他错误：toast 为「提交失败，请重试」', async () => {
+    const api = createApiMock();
+    api.capture.create = vi
+      .fn()
+      .mockRejectedValue(new Error('db busy')) as unknown as ShiguangApi['capture']['create'];
+    window.api = api;
+    const editorRef = renderInnerWithToaster();
+    const editor = editorRef.current!;
+
+    setEditorText(editor, 'retry me');
+    fireEvent.click(screen.getByRole('button', { name: /拾光/ }));
+
+    expect(await screen.findByText('提交失败')).toBeTruthy();
+    expect(await screen.findByText('提交失败，请重试')).toBeTruthy();
   });
 });
 

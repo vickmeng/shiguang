@@ -9,6 +9,7 @@ import {
   createCapture,
   createCaptureWithAttachments,
   deleteCaptures,
+  getById,
   listCaptures,
   queryCaptures,
   setCaptureDatabase,
@@ -361,6 +362,204 @@ describe('createCaptureWithAttachments', () => {
     expect(
       db.prepare(`SELECT COUNT(*) AS count FROM attachments`).get(),
     ).toEqual({ count: 0 });
+  });
+});
+
+describe('createCaptureWithAttachments analysis 写入（analyses 表）', () => {
+  let tmpDir: string;
+  let db: ReturnType<typeof initDatabase>;
+
+  beforeEach(() => {
+    const setup = setupDb();
+    tmpDir = setup.tmpDir;
+    db = setup.db;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function analysesCount(): number {
+    return (db.prepare(`SELECT COUNT(*) AS count FROM analyses`).get() as { count: number })
+      .count;
+  }
+
+  // 注：listCaptures 读回 aiSummary 属任务 3（读取侧 JOIN）范围，本组用例直查
+  // analyses 表验证写侧语义。
+  it('传入 analysis 时 analyses 行随记录同事务写入（直查 analyses 表读回 summary/model）', () => {
+    const record = createCaptureWithAttachments({
+      text: '图文混排',
+      attachments: [{ filePath: 'images/summary.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+
+    const row = db
+      .prepare(`SELECT record_id, summary, model FROM analyses WHERE record_id = ?`)
+      .get(record.id) as { record_id: number; summary: string; model: string };
+    expect(row).toEqual({ record_id: record.id, summary: '一句话', model: 'kimi-k2.6' });
+  });
+
+  it('analysis 缺省时不写 analyses 行，记录正常返回', () => {
+    const record = createCaptureWithAttachments({
+      text: '无摘要',
+      attachments: [{ filePath: 'images/no-analysis.png', sizeBytes: 1 }],
+    });
+
+    expect(analysesCount()).toBe(0);
+    expect(record.text).toBe('无摘要');
+    expect(record.imagePaths).toEqual(['images/no-analysis.png']);
+  });
+
+  it('事务性：attachments 插入失败时 analyses 行也不残留（三表一致回滚）', () => {
+    db.exec(`
+      CREATE TRIGGER force_attachments_fail_for_analysis
+      BEFORE INSERT ON attachments
+      BEGIN
+        SELECT RAISE(ABORT, 'forced attachment failure');
+      END;
+    `);
+
+    expect(() =>
+      createCaptureWithAttachments({
+        text: 'x',
+        attachments: [{ filePath: 'images/x.png', sizeBytes: 1 }],
+        analysis: { summary: '一句话', model: 'kimi-k2.6' },
+      }),
+    ).toThrow();
+
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM records`).get()).toEqual({ count: 0 });
+    expect(analysesCount()).toBe(0);
+  });
+
+  it('删除记录后 analyses 行随外键 CASCADE 级联消失', () => {
+    const record = createCaptureWithAttachments({
+      text: '待删除',
+      attachments: [],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+    expect(analysesCount()).toBe(1);
+
+    deleteCaptures([record.id]);
+
+    expect(analysesCount()).toBe(0);
+  });
+});
+
+describe('读取侧 aiSummary（listCaptures / queryCaptures LEFT JOIN analyses）', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = setupDb().tmpDir;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('带 analysis 记录经 listCaptures 读回 aiSummary', () => {
+    createCaptureWithAttachments({
+      text: '图文混排',
+      attachments: [{ filePath: 'images/summary.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+
+    const found = listCaptures().find((r) => r.text === '图文混排');
+    expect(found?.aiSummary).toBe('一句话');
+  });
+
+  it('带 analysis 记录经 queryCaptures 读回 aiSummary，total 不回退', () => {
+    createCaptureWithAttachments({
+      text: '关键词 图文',
+      attachments: [{ filePath: 'images/q.png', sizeBytes: 1 }],
+      analysis: { summary: '查询摘要', model: 'kimi-k2.6' },
+    });
+    createCapture({ text: '无关文字' });
+
+    const result = queryCaptures({ keyword: '关键词', page: 1, pageSize: 10 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0].aiSummary).toBe('查询摘要');
+  });
+
+  it('无摘要记录读回 aiSummary 为 null', () => {
+    createCapture({ text: '纯文字' });
+    createCaptureWithAttachments({
+      text: '无摘要图文',
+      attachments: [{ filePath: 'images/no-summary.png', sizeBytes: 1 }],
+    });
+
+    const records = listCaptures();
+    expect(records.find((r) => r.text === '纯文字')?.aiSummary).toBeNull();
+    expect(records.find((r) => r.text === '无摘要图文')?.aiSummary).toBeNull();
+  });
+
+  it('多附件记录的 aiSummary 在多个 JOIN 行下聚合正确（恰一行值，1:1 无行膨胀）', () => {
+    createCaptureWithAttachments({
+      text: '',
+      sourceApp: null,
+      attachments: [
+        { filePath: 'images/m1.png', sizeBytes: 1 },
+        { filePath: 'images/m2.png', sizeBytes: 2 },
+        { filePath: 'images/m3.png', sizeBytes: 3 },
+      ],
+      analysis: { summary: '多图摘要', model: 'kimi-k2.6' },
+    });
+
+    const records = listCaptures();
+
+    expect(records).toHaveLength(1);
+    expect(records[0].imagePaths).toEqual(['images/m1.png', 'images/m2.png', 'images/m3.png']);
+    expect(records[0].aiSummary).toBe('多图摘要');
+  });
+});
+
+describe('getById', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = setupDb().tmpDir;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('命中返回完整记录（含 aiSummary 与有序 imagePaths）', () => {
+    const record = createCaptureWithAttachments({
+      text: '图文混排',
+      sourceApp: 'WeChat',
+      tags: ['工作'],
+      attachments: [
+        { filePath: 'images/a.png', sizeBytes: 1 },
+        { filePath: 'images/b.png', sizeBytes: 2 },
+      ],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+
+    const found = getById(record.id);
+
+    expect(found).not.toBeNull();
+    expect(found?.id).toBe(record.id);
+    expect(found?.text).toBe('图文混排');
+    expect(found?.sourceApp).toBe('WeChat');
+    expect(found?.tags).toEqual(['工作']);
+    expect(found?.aiSummary).toBe('一句话');
+    expect(found?.imagePaths).toEqual(['images/a.png', 'images/b.png']);
+  });
+
+  it('纯文字记录命中时 imagePaths 为 []、aiSummary 为 null', () => {
+    const record = createCapture({ text: '纯文字' });
+
+    const found = getById(record.id);
+
+    expect(found?.imagePaths).toEqual([]);
+    expect(found?.aiSummary).toBeNull();
+  });
+
+  it('未命中返回 null', () => {
+    createCapture({ text: '存在' });
+
+    expect(getById(999)).toBeNull();
   });
 });
 

@@ -6,9 +6,13 @@
  * 适配图文混排），容器 h-full 充满窗口。
  *
  * 任务 16：关闭按钮旁新增「打开后台」按钮（console.open 唤起后台窗口）。
+ *
+ * 任务 10：根部补挂 <Toaster />（自 toast.tsx），capture-form 失败分支
+ * 的 toast（AI 无意义文案 / 通用重试文案）经此渲染；单页只挂一个 Toaster。
  */
 import { LayoutDashboard, X } from 'lucide-react';
 import { Button } from '../components/ui/button';
+import { Toaster } from '../components/ui/toast';
 import { CaptureForm } from './features/capture/capture-form';
 
 export function App() {
@@ -36,6 +40,7 @@ export function App() {
         <X className="h-4 w-4" />
       </Button>
       <CaptureForm />
+      <Toaster />
     </div>
   );
 }

@@ -21,6 +21,11 @@
  *   「拾光中…」→ success「✓ 已拾光」/ error「提交失败」，成功/失败态闪现
  *   STATUS_RESET_DELAY_MS 后自动回到 idle 可录态；成功回 idle 时清空编辑器
  *   （已入库，准备下一条）；失败保留内容供重试。窗口不自动收起。
+ *   loading 终点 = 入库 + AI 分析完成（主进程 capture:create 串行编排，
+ *   见 captureHandlers）；失败分支按错误 message 二分外发 toast——
+ *   AI_NOT_MEANINGFUL_MESSAGE（AI 判定无有效信息）→ 该固定文案，
+ *   其余错误（断网/超时/落库失败）→ 「提交失败，请重试」；成功路径不加 toast
+ *   （输入框根部 <Toaster /> 由 App.tsx 装配，任务 10）
  * - imageBytesRef 以节点 key 关联粘贴图片字节（粘贴分流由任务 17 接管）；
  *   提交编排（任务 18）：text 取 `$getRoot().getTextContent()`（段落 \n 分隔，
  *   ImageNode 不贡献字符），images 字节按文档顺序由 `$nodesOfType(ImageNode)`
@@ -69,7 +74,9 @@ import {
   type PasteCommandType,
 } from 'lexical';
 import type { Tag } from '@shiguang/shared';
+import { AI_NOT_MEANINGFUL_MESSAGE } from '@shiguang/shared';
 import { Button } from '../../../components/ui/button';
+import { toast } from '../../../components/ui/toast';
 import { TagSelect } from '../../../components/ui/tag-select';
 import { $createImageNode, ImageNode } from './image-node';
 
@@ -249,9 +256,15 @@ export function CaptureFormInner() {
         imageBytesRef.current.clear();
         setStatus('idle');
       }, STATUS_RESET_DELAY_MS);
-    } catch {
-      // 失败保留内容供重试，闪现后回到可录态
+    } catch (err) {
+      // 失败保留内容供重试，闪现后回到可录态；toast 按主进程错误文案二分：
+      // AI 判定无有效信息 → 固定文案；其余（断网/超时/落库失败）→ 通用重试文案
       setStatus('error');
+      toast(
+        err instanceof Error && err.message === AI_NOT_MEANINGFUL_MESSAGE
+          ? AI_NOT_MEANINGFUL_MESSAGE
+          : '提交失败，请重试',
+      );
       statusTimerRef.current = window.setTimeout(() => {
         setStatus('idle');
       }, STATUS_RESET_DELAY_MS);
