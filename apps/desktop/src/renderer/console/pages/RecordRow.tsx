@@ -2,14 +2,20 @@
  * 记录表格行：RecordsPage <table> 的单行 <tr> 子组件——
  * 六列固定列序：复选框 | 时间 | 摘要 | 级别 | 标签 | 操作（无内容预览列）。
  * 复选框常驻（aria-label「选择记录 N」），选中编排由父组件接线。
- * 摘要 td 为整格可点击 button 语义（text-left、line-clamp-2 两行截断）：
+ * tr 常驻 hover:bg-neutral-50 行悬停反馈。
+ * 摘要 td 为整格可点击普通文本（非 button，便于鼠标滑动选中；text-left、
+ * line-clamp-2 两行截断、select-text 放开全局 user-select:none），
+ * 常驻可点击提示：cursor-pointer + 虚线下划线 decoration-dashed，
+ * hover 强化 text-neutral-900 / decoration-neutral-500：
  * record.aiSummary 非空时点击回调 onOpenDetail（父级打开详情弹窗）；
- * null/undefined（无摘要的存量记录）渲染不可点击占位「—」。
+ * null/undefined（无摘要的存量记录）渲染不可点击占位「—」（无下划线/手型）。
  * 级别 td 按 record.aiGrade 渲染三档徽标（复用 record-detail-dialog 导出的
  * GradeBadge，避免双份映射漂移）；NULL/undefined（AI 未分级）时 td 留空。
  * 标签 td 沿用实心 chips 逻辑：底色 = 标签色 + 名称，底色取父级下发的
  * tagColors（库内标签用库色），文字色经 tagTextColor 按底色亮度自动切换；
- * tagColors 缺失该项名（已删标签）实心灰 #d4d4d4 + 白字。
+ * tagColors 缺失该项名（已删标签）实心灰 #d4d4d4 + 白字；
+ * 容器 flex-wrap 允许多 chip 折行，单个 chip 自身 whitespace-nowrap + shrink-0，
+ * 列宽压缩时 chip 内部文字不断行。
  * 操作 td 为复制/删除按钮（tr 无整行点击，不再需要 stopPropagation）：
  * 复制分流保留——imagePaths.length > 0 走 window.api.capture.copyImage({ id })
  * （主进程复制首图到剪贴板），纯文字行维持 navigator.clipboard.writeText，
@@ -48,7 +54,7 @@ export function RecordRow({ record, selected, tagColors, onToggleSelect, onOpenD
   };
 
   return (
-    <tr className="border-t border-neutral-200 first:border-t-0 align-top">
+    <tr className="border-t border-neutral-200 first:border-t-0 align-top hover:bg-neutral-50">
       {/* 复选框列 */}
       <td className="p-3">
         <input
@@ -62,16 +68,15 @@ export function RecordRow({ record, selected, tagColors, onToggleSelect, onOpenD
       <td className="p-3 text-xs text-neutral-400 whitespace-nowrap">
         {new Date(record.createdAt).toLocaleString()}
       </td>
-      {/* 摘要列：整格可点击弹详情；无摘要渲染不可点击占位 */}
+      {/* 摘要列：整格可点击弹详情（普通文本可滑动选中）；无摘要渲染不可点击占位 */}
       <td className="p-3 max-w-md">
         {record.aiSummary ? (
-          <button
-            type="button"
+          <span
             onClick={onOpenDetail}
-            className="block w-full text-left text-sm text-neutral-700 line-clamp-2"
+            className="block w-full cursor-pointer select-text text-left text-sm text-neutral-700 line-clamp-2 underline decoration-dashed decoration-neutral-300 underline-offset-2 hover:text-neutral-900 hover:decoration-neutral-500"
           >
             {record.aiSummary}
-          </button>
+          </span>
         ) : (
           <span className="text-sm text-neutral-300">—</span>
         )}
@@ -89,7 +94,7 @@ export function RecordRow({ record, selected, tagColors, onToggleSelect, onOpenD
               return (
                 <span
                   key={name}
-                  className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                  className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs"
                   style={{
                     backgroundColor: bg,
                     color: tagColors?.[name] ? tagTextColor(bg) : '#ffffff',

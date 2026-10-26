@@ -53,7 +53,7 @@ describe('RecordDetailDialog 记录详情弹窗', () => {
     expect(document.querySelector('.bg-black\\/40')).toBeTruthy();
   });
 
-  it('点遮罩与点 aria-label=「关闭」按钮均触发 onClose', async () => {
+  it('点遮罩与点 aria-label=「关闭」按钮均触发 onClose（drag handle 不吞掉关闭 click）', async () => {
     const user = userEvent.setup();
     const { onClose } = renderDialog();
 
@@ -62,6 +62,27 @@ describe('RecordDetailDialog 记录详情弹窗', () => {
 
     await user.click(screen.getByRole('button', { name: '关闭' }));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('头部与全文区为兄弟结构：头部固定（record-detail-header + border-b），全文区是唯一 overflow-y-auto 滚动容器', () => {
+    renderDialog({ record: makeRecord({ aiGrade: 'high', tags: ['工作'] }) });
+
+    const dialog = screen.getByRole('dialog');
+    const header = dialog.querySelector('.record-detail-header');
+    expect(header).toBeTruthy();
+    // 头部固定：底边框分隔 + 不落在滚动区内
+    expect(header!.className).toContain('border-b');
+    // 关闭按钮不被全文滚动区包裹
+    const closeBtn = screen.getByRole('button', { name: '关闭' });
+    // 全文区：flex-1 + min-h-0 + overflow-y-auto，与 header 互为兄弟
+    const scrollAreas = dialog.querySelectorAll('.overflow-y-auto');
+    expect(scrollAreas.length).toBe(1);
+    const scrollArea = scrollAreas[0];
+    expect(scrollArea.className).toContain('flex-1');
+    expect(scrollArea.className).toContain('min-h-0');
+    expect(scrollArea.contains(header)).toBe(false);
+    expect(header!.contains(scrollArea)).toBe(false);
+    expect(scrollArea.contains(closeBtn)).toBe(false);
   });
 
   it('正文渲染 record.document 导出内容（RichCapturePreview 路径）', () => {

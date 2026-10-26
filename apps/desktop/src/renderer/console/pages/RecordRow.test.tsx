@@ -114,12 +114,16 @@ describe('RecordRow 记录表格行', () => {
     expect(container.textContent).not.toContain('图文记录说明');
   });
 
-  it('aiSummary 非空时摘要 button 点击触发 onOpenDetail', async () => {
+  it('aiSummary 非空时摘要文本点击触发 onOpenDetail（普通文本可滑动选中）', async () => {
     const user = userEvent.setup();
     const handlers = renderRow({
       record: makeTextRecord({ aiSummary: '这是一句摘要' }),
     });
-    await user.click(screen.getByRole('button', { name: '这是一句摘要' }));
+    const summary = screen.getByText('这是一句摘要');
+    // select-text：放开全局 user-select:none，支持鼠标滑动选中
+    expect(summary.className).toContain('select-text');
+    expect(summary.className).toContain('cursor-pointer');
+    await user.click(summary);
     expect(handlers.onOpenDetail).toHaveBeenCalledTimes(1);
     expect(handlers.onToggleSelect).not.toHaveBeenCalled();
   });

@@ -708,7 +708,7 @@ describe('RecordsPage 记录页', () => {
       expect(container.querySelector('table img')).toBeNull();
 
       // 点摘要打开详情弹窗：document 渲染 shiguang-image:// 协议图片
-      await user.click(screen.getByRole('button', { name: '图文记录摘要 2' }));
+      await user.click(screen.getByText('图文记录摘要 2'));
       const dialog = screen.getByRole('dialog');
       const imgs = Array.from(dialog.querySelectorAll('img')) as HTMLImageElement[];
       expect(imgs.map((i) => i.src)).toEqual(['shiguang-image://a.png']);
@@ -898,7 +898,7 @@ describe('RecordsPage 记录页', () => {
       window.api = api;
       const { container } = render(<RecordsPage />);
 
-      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      await user.click(await screen.findByText('观点摘要'));
       const dialog = screen.getByRole('dialog');
       expect(dialog.getAttribute('aria-modal')).toBe('true');
       // 全文（text 兜底）与元信息行（时间 / 级别徽标 / 标签 chips）
@@ -911,7 +911,7 @@ describe('RecordsPage 记录页', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
 
       // 遮罩点击关闭
-      await user.click(screen.getByRole('button', { name: '观点摘要' }));
+      await user.click(screen.getByText('观点摘要'));
       expect(screen.getByRole('dialog')).toBeTruthy();
       const overlay = container.querySelector('.bg-black\\/40');
       expect(overlay).toBeTruthy();
@@ -925,7 +925,7 @@ describe('RecordsPage 记录页', () => {
       window.api = api;
       render(<RecordsPage />);
 
-      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      await user.click(await screen.findByText('观点摘要'));
       expect(screen.getByRole('dialog')).toBeTruthy();
 
       await user.click(screen.getByRole('button', { name: '删除记录 1' }));
@@ -942,7 +942,7 @@ describe('RecordsPage 记录页', () => {
       window.api = api;
       render(<RecordsPage />);
 
-      await user.click(await screen.findByRole('button', { name: '观点摘要' }));
+      await user.click(await screen.findByText('观点摘要'));
       expect(screen.getByRole('dialog')).toBeTruthy();
 
       await user.click(screen.getByRole('checkbox', { name: '选择记录 1' }));

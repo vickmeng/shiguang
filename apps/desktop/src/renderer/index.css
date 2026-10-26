@@ -37,3 +37,16 @@ body {
 #app {
   height: 100%;
 }
+
+/* 记录详情弹窗（record-detail-dialog）右下角 resize 手柄：
+   re-resizable 对手柄施加 inline style（20×20、right/bottom -10px），
+   Tailwind 类无法覆盖，故在此固定为卡内右下角的斜纹三角指示 */
+.record-detail-resize-handle {
+  width: 16px !important;
+  height: 16px !important;
+  right: 4px !important;
+  bottom: 4px !important;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, #d4d4d4 50%);
+  border-bottom-right-radius: 4px;
+}
