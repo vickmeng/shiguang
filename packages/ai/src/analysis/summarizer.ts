@@ -42,14 +42,14 @@ export function setAnalysisImagesBaseDir(dir: string): void {
  * 设计取向：极简、无品牌语境——LLM 不需要知道「拾光」是什么，只需知道输入构成
  * （文字可为空 + 图片可没有 = 一条完整记录）并做好摘要与门卫判定。
  */
-export const SUMMARIZER_SYSTEM_PROMPT = `你将收到一段文字（可能为空）和若干张图片（可能没有），它们是一条完整记录的全部内容。
+export const SUMMARIZER_SYSTEM_PROMPT = `你将收到一段文字（可能为空）、若干张图片（可能没有）和用户为这条记录打的标签（可能没有，标签是用户亲自标记的线索），它们是一条完整记录的全部内容。
 
 任务：
 1. 判定这条记录是否值得长期保存：手误乱敲、纯符号/表情、空泛无信息量的内容
    不值得；有具体信息量的文字，或图片本身含可理解内容（截图、文档、照片等），值得。
 2. 值得保存时，输出一句不超过 60 字的中文摘要：覆盖文字与图片的整体含义
    （图片是内容的一部分，不是附件）；不复述原文，不编造看不见的内容。
-3. 判定这条记录对未来了解用户的价值，输出三档分级之一：- high：观点、决定、计划、强烈情感、有长期参考价值的内容；- mid：一般事实、日常事务记录；- low：琐碎、一次性、过后即无参考价值的内容。仅当 meaningful=true 时输出分级。
+3. 判定这条记录对未来了解用户的价值，输出三档分级之一。先看标签：若标签语义本身表达强调或重要（如名为「重点」「重要」之类），该条必为 high。其余情况从严按内容判定：观点、决定、计划、强烈情感、有长期参考价值的内容才给 high（重点不轻给，宁缺毋滥）；一般事实、日常事务记录为 mid；琐碎、一次性、过后即无参考价值的内容为 low。有标签但内容平凡仍判 mid，标签不单独构成升级理由。仅当 meaningful=true 时输出分级。
 
 严格输出 JSON：{"meaningful": true/false, "summary": "...", "grade": "high"|"mid"|"low"}（不值得保存时省略 summary 与 grade）`;
 
@@ -62,7 +62,7 @@ const analysisOutputSchema = z.object({
   grade: z
     .enum(['high', 'mid', 'low'])
     .optional()
-    .describe('观点/决定/计划/强情感/长期参考→high；一般事实/日常→mid；琐碎/一次性→low'),
+    .describe('标签语义表强调/重要必为 high；观点/决定/计划/强情感/长期参考从严给 high；一般事实/日常→mid；琐碎/一次性→low'),
 });
 
 /**
@@ -97,6 +97,8 @@ const agent = new Agent({
 export async function analyzeCapture(input: {
   text: string;
   images: Array<{ filePath: string }>;
+  /** 用户为记录打的标签（AI 分级参考线索）；缺省 []，非空时以文本块随 user content 传入 */
+  tags?: string[];
 }): Promise<{ meaningful: true; summary: string; grade?: Grade } | { meaningful: false }> {
   if (!process.env.KIMI_API_KEY) {
     throw new Error(
@@ -114,6 +116,10 @@ export async function analyzeCapture(input: {
   > = [];
   if (input.text) {
     content.push({ type: 'text', text: input.text });
+  }
+  const tags = input.tags ?? [];
+  if (tags.length > 0) {
+    content.push({ type: 'text', text: `用户为这条记录打的标签：${tags.join('、')}` });
   }
   for (const image of input.images) {
     const bytes = await readFile(path.join(imagesBaseDir, image.filePath));

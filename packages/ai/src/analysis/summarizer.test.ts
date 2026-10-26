@@ -99,6 +99,38 @@ describe('analyzeCapture', () => {
     expect(userParts).toContainEqual({ type: 'text', text: '今天记录了架构设计' });
   });
 
+  it('tags 非空时 user content 在文字块之后追加标签文本块（顿号连接）', async () => {
+    const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({ object: { meaningful: false } });
+
+    await analyzeCapture({ text: '今天记录了架构设计', images: [], tags: ['重点', '工作'] });
+
+    const [messages] = generateMock.mock.calls[0] as Array<
+      Array<{ role: string; content: unknown }>
+    >;
+    const userParts = messages[1].content as Array<{ type: string; text?: string }>;
+    expect(userParts).toEqual([
+      { type: 'text', text: '今天记录了架构设计' },
+      { type: 'text', text: '用户为这条记录打的标签：重点、工作' },
+    ]);
+  });
+
+  it('不传 tags 或传空数组时不追加标签文本块', async () => {
+    const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValue({ object: { meaningful: false } });
+
+    await analyzeCapture({ text: '无标签记录', images: [] });
+    await analyzeCapture({ text: '空标签记录', images: [], tags: [] });
+
+    for (const call of generateMock.mock.calls) {
+      const [messages] = call as Array<Array<{ role: string; content: unknown }>>;
+      const userParts = messages[1].content as Array<{ type: string; text?: string }>;
+      expect(userParts.some((p) => p.text?.startsWith('用户为这条记录打的标签'))).toBe(false);
+    }
+  });
+
   it('meaningful=false 时返回 { meaningful: false }（不带 summary）', async () => {
     const { analyzeCapture, setAnalysisImagesBaseDir } = await loadSummarizer();
     setAnalysisImagesBaseDir(makeTempDir());
@@ -269,11 +301,21 @@ describe('SUMMARIZER_SYSTEM_PROMPT 与 Agent 构造（design 3.2 草案逐字锁
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('图片是内容的一部分，不是附件');
   });
 
-  it('SUMMARIZER_SYSTEM_PROMPT 含分级任务条款与改写后 JSON 格式行', async () => {
+  it('SUMMARIZER_SYSTEM_PROMPT 输入构成行含标签线索说明', async () => {
+    const { SUMMARIZER_SYSTEM_PROMPT } = await import('./summarizer');
+
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain(
+      '用户为这条记录打的标签（可能没有，标签是用户亲自标记的线索）',
+    );
+  });
+
+  it('SUMMARIZER_SYSTEM_PROMPT 分级任务条款：标签语义表强调必为 high、从严给 high、宁缺毋滥', async () => {
     const { SUMMARIZER_SYSTEM_PROMPT } = await import('./summarizer');
 
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('对未来了解用户的价值');
-    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('high：观点、决定、计划');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('该条必为 high');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('宁缺毋滥');
+    expect(SUMMARIZER_SYSTEM_PROMPT).toContain('标签不单独构成升级理由');
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain('仅当 meaningful=true 时输出分级');
     expect(SUMMARIZER_SYSTEM_PROMPT).toContain(
       '严格输出 JSON：{"meaningful": true/false, "summary": "...", "grade": "high"|"mid"|"low"}（不值得保存时省略 summary 与 grade）',

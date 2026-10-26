@@ -92,6 +92,8 @@ export function registerCaptureHandlers(): void {
       const analysis = await analyzeCapture({
         text: payload.text,
         images: written.map((w) => ({ filePath: w.filePath })),
+        // 用户标签是 AI 分级的重要线索（标签语义表强调必为 high），原样透传
+        tags: payload.tags,
       });
       if (!analysis.meaningful || !analysis.summary?.trim()) {
         throw new Error(AI_NOT_MEANINGFUL_MESSAGE);

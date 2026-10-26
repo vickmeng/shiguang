@@ -316,6 +316,7 @@ describe('capture:create AI 分析编排', () => {
     expect(stubs.analyzeCapture).toHaveBeenCalledWith({
       text: '图文混排',
       images: [{ filePath: 'images/a.png' }, { filePath: 'images/b.png' }],
+      tags: payload.tags,
     });
     expect(stubs.createCaptureWithAttachments).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -329,6 +330,19 @@ describe('capture:create AI 分析编排', () => {
     expect(orderAnalyze).toBeLessThan(orderDao);
     // 成功路径不触发清理
     expect(stubs.fs.promises.rm).not.toHaveBeenCalled();
+  });
+
+  it('payload 带标签：analyzeCapture 入参含 tags: payload.tags（AI 可见用户标签线索）', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue([]);
+    const payload: CreateCapturePayload = { text: 'x', images: [], tags: ['重点', '灵感'] };
+
+    await invokeCreate(payload);
+
+    expect(stubs.analyzeCapture).toHaveBeenCalledWith({
+      text: 'x',
+      images: [],
+      tags: ['重点', '灵感'],
+    });
   });
 
   it('analyzeCapture 返回 grade（AI 判重点）：analysis 载荷原样透传 grade', async () => {
