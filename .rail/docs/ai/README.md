@@ -15,6 +15,7 @@
 - **迁移 0006 的 down 直接用 `ALTER TABLE analyses DROP COLUMN grade`，不重建表**：better-sqlite3 ^12.11.1 内置 SQLite ≥3.35（2021-03 起）支持 DROP COLUMN，一行 DDL 即可；重建表需复制数据 + 重建 FK/索引，无谓复杂度与风险。
 - **grade 缺失与非法用「zod `.optional()` + 天然失败」一语双关，不加应用层分支**：optional 精确表达「缺失通过（存 NULL 不阻塞入库）/ 非法拒绝（整链失败可重试）」，Mastra structured output 解析失败自然抛错，走迭代一既有失败路径（抛错 + 图片清理），代码零新增 catch。
 - **分级收敛进既有 summarizer 同一次调用（`{meaningful, summary?, grade?}`），不建独立分级链路**：独立链路 doubles LLM 成本与延迟，且摘要与分级同上下文判定质量更稳；prompt 以第三任务（判「对未来了解用户的价值」）+ zod description 双写判定标准。
+- **分级判定引入用户标签作为重点线索：标签语义优先（强调/重要类标签必为 high）、其余从严给 high（宁缺毋滥）、标签不单独构成升级理由**：`analyzeCapture` input 新增 `tags?: string[]`（`packages/ai/src/analysis/summarizer.ts:97`，缺省 `[]`），标签非空时 user content 在文字块后追加「用户为这条记录打的标签：A、B」文本块；判定条款写死在 `SUMMARIZER_SYSTEM_PROMPT`（summarizer.ts:45）第三分级任务 + `analysisOutputSchema.grade.describe` 双处，标签可见但只是线索而非升级依据。tags 由 captureHandlers 调用处透传（`apps/desktop/src/main/ipc/captureHandlers.ts:92`，`tags: payload.tags`），AI 链路与入库共用同一份 payload 标签快照，不单独查标签存储。
 
 ## 技术债务
 
