@@ -2,7 +2,7 @@
  * summarizer.ts — Mastra 分析模块：capture:create 链路的单条内容理解（门卫 + 一句话摘要）。
  *
  * 编排：analyzeCapture 收 text + 全部图片（相对 filePath）→ 逐张读盘转
- * data URL → Mastra Agent（@ai-sdk/openai createOpenAI 接 Moonshot OpenAI
+ * data URL → Mastra Agent（Mastra 原生 custom endpoint 配置接 Kimi OpenAI
  * 兼容端点，structured output zod 校验）→ { meaningful, summary? }。
  * - 未配置 KIMI_API_KEY / 未注入 images baseDir → 抛配置指引错误；
  * - 超时上限 60s（AbortSignal.timeout(60_000)，AI SDK 官方取消契约）；
@@ -14,7 +14,6 @@
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createOpenAI } from '@ai-sdk/openai';
 import type { MastraModelConfig } from '@mastra/core/llm';
 import { Agent } from '@mastra/core/agent';
 import { z } from 'zod';
@@ -63,30 +62,21 @@ const analysisOutputSchema = z.object({
  * 测试阶段临时写死 Kimi Code 编程订阅端点（用户决策 2026-10-23），
  * 上线前换回开放平台端点 https://api.moonshot.cn/v1（见 .rail/docs/ai 技术债务）。
  *
- * 惰性初始化（首次 analyzeCapture 时构造）：ESM import 提升使模块级构造早于
- * 主进程 dotenv 加载（loadEnv 在入口模块体执行，@shiguang/ai 的 import 已先求值），
- * 模块级 createOpenAI 会固化 undefined 的 apiKey / 缺省模型（KIMI_MODEL 尚未进 env），
- * 首次调用时 process.env 已由 dotenv 就绪。
+ * model 用 Mastra 原生 custom endpoint 配置（{ id, url, apiKey }），并以函数形式
+ * 传入：Mastra 在 generate 时才求值（resolveModelConfig），故 process.env 读取
+ * 晚于主进程 dotenv 加载，无需再为 ESM import 提升做惰性初始化 workaround。
  */
-let agent: Agent | null = null;
-function getAgent(): Agent {
-  if (!agent) {
-    const kimi = createOpenAI({
-      baseURL: 'https://api.kimi.com/coding/v1',
-      apiKey: process.env.KIMI_API_KEY,
-    });
-    agent = new Agent({
-      id: 'capture-summarizer',
-      name: 'capture-summarizer',
-      instructions: SUMMARIZER_SYSTEM_PROMPT,
-      // Mastra 1.79 运行期对裸 AI SDK v4 模型自动包一层 AISDKV7LanguageModel
-      // （dist llm 模块 specificationVersion === 'v4' 分支），此处公共类型只声明
-      // 包装后的 MastraLanguageModelV4，故窄化转换（design 3.1 锁定 createOpenAI 方案）。
-      model: kimi(resolveKimiModel()) as unknown as MastraModelConfig,
-    });
-  }
-  return agent;
-}
+const agent = new Agent({
+  id: 'capture-summarizer',
+  name: 'capture-summarizer',
+  instructions: SUMMARIZER_SYSTEM_PROMPT,
+  model: (): MastraModelConfig => ({
+    // id 需含 provider 前缀（Mastra OpenAICompatibleConfig 约定 `${string}/${string}`）
+    id: `custom/${resolveKimiModel()}` as `${string}/${string}`,
+    url: 'https://api.kimi.com/coding/v1',
+    apiKey: process.env.KIMI_API_KEY,
+  }),
+});
 
 /**
  * 分析单条捕获内容：text + 全部图片 → { meaningful, summary? }。
@@ -125,7 +115,7 @@ export async function analyzeCapture(input: {
     });
   }
 
-  const result = await getAgent().generate(
+  const result = await agent.generate(
     [
       { role: 'system', content: SUMMARIZER_SYSTEM_PROMPT },
       { role: 'user', content },

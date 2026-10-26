@@ -4,7 +4,7 @@
 
 - **先分析后入库：AI 分析同步插入 capture:create 入库事务之前，记录 + 摘要单事务落库**：Mastra Agent 对本条文字 + 全部图片产出一句话摘要并做门卫判定；无意义判定或调用失败（断网/限流/未配 Key/超时/空摘要）→ 整链失败不入库、尽力清理已写盘图片、按钮失败态可重试。不选降级入库（不存在「无摘要的记录」）、不选异步 pending/分析中状态（摘要永远与记录同时存在）。
 - **分析编排用 Mastra Agent 单步 structured output（zod `{meaningful, summary?}`），不建 workflow、不用 Mastra memory/storage**：本期是「一次 LLM 调用出结构化判定+摘要」的单步语义，无步骤编排/断点续跑需求，workflow 会引入快照存储等无谓复杂度。
-- **模型接入用 `@ai-sdk/openai` 的 `createOpenAI` 自定义端点接 Kimi（OpenAI 兼容），不引 Moonshot 官方 SDK、主进程不加 HTTP client 依赖**：Mastra 官方即以 AI SDK 模型提供方为模型层，集成路径最短且零额外 HTTP 依赖。默认模型 `kimi-k2.6`（官方多模态示例模型），`KIMI_MODEL` 环境变量可覆盖，`analyses.model` 记 resolveKimiModel() 实际值便于追溯。
+- **模型接入用 Mastra 原生 custom endpoint 函数配置（`model: () => MastraModelConfig`，`id/url/apiKey` 直连 Kimi OpenAI 兼容端点），不引 Moonshot 官方 SDK、主进程不加 HTTP client 依赖、不保留 AI SDK provider 直传**：Mastra 运行期 `resolveModelConfig` 在 generate 时才对函数求值，env 读取天然晚于主进程 dotenv 加载，故无需 getAgent 惰性初始化；函数体内 model id 保留 `${string}/${string}` 窄断言即满足 TS 联合类型，无需 unknown cast。默认模型 `kimi-k2.6`（官方多模态示例模型），`KIMI_MODEL` 环境变量在求值时覆盖，`analyses.model` 记 resolveKimiModel() 实际值便于追溯。
 - **摘要存 `analyses` 独立表、与 records 严格 1:1（record_id 即 PK + FK ON DELETE CASCADE），不挂 records 列、不做关联表**：摘要来源（模型、时点）与记录本体生命周期不同（prompt 调优后新数据重出），独立表是最简 1:1 扩展；挂列无法记 model，关联表是多对多错配。迭代一不预埋 status/prompt_version/error——失败即不入库，无需状态字段。
 - **analyses 写入收敛进 `createCaptureWithAttachments` 的三表事务，不新建 analysisDao**：摘要写入与记录入库是同一事务边界，拆开必然产生中间态或分布式事务；且 captureDao 已有 listCaptures/queryCaptures 并存债务，明确勿制造第三份并存 DAO 接口。`createCapture` 纯文字直写不加 analysis 参数——AI 链路唯一写入口是 createCaptureWithAttachments。
 - **读取侧用 `LEFT JOIN analyses` 随 capture:list 带出摘要（1:1 无行膨胀），不做二次查询**：结果行数仍由 attachments 决定，toRecords 聚合与 total COUNT 均不变；二次查询要额外 round trip 且 list/query 两条路径都要接。
@@ -16,4 +16,5 @@
 
 - [ ] 记录编辑联动摘要失配：当前记录无编辑能力，未来引入编辑后摘要必然失配——编辑功能立项时须把「编辑触发摘要重跑」作为其需求一部分；本期不预埋 prompt_version
 - [ ] AI 分析成本与隐私规模化压力：逐条实时上云（文字+全部图片按 token 计费）随记录量累积成本与暴露面；出现批量导入/高频记录场景时评估本地小模型兜底或降频策略，届时单独立项
+- [ ] 内置 `kimi-code-plan-cn` router provider 可进一步简化模型接入（届时可删 custom endpoint 函数配置，直接传 provider 模型 id 字符串、依赖其内置 KIMI_API_KEY 认证）；当前不采用：官方 provider 模型列表不含 kimi-k2.6，且 `KIMI_MODEL` 任意模型覆盖语义须保留
 - [ ] prompt 调优无重跑机制：SUMMARIZER_SYSTEM_PROMPT 调优后只能用新数据验证，旧摘要不升级；未来若需升级须单独立项重跑工具（届时再加 prompt_version）

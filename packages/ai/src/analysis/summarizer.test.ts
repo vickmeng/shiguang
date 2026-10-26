@@ -1,9 +1,8 @@
 /**
- * summarizer.test.ts — analyzeCapture 编排单测（vi.mock 模型层与 Agent）。
+ * summarizer.test.ts — analyzeCapture 编排单测（vi.mock 打桩 Agent）。
  *
- * vi.mock('@ai-sdk/openai') 与 vi.mock('@mastra/core/agent') 打桩模型层与 Agent：
- * - generateMock 捕获 agent.generate 收到的 messages 与 options；
- * - agentConfigs 捕获 Agent 构造入参。
+ * vi.mock('@mastra/core/agent') 打桩 Agent：generateMock 捕获 agent.generate
+ * 收到的 messages 与 options；agentConfigs 捕获 Agent 构造入参。
  * 图片读盘走真实临时目录（mkdtemp 注入 setAnalysisImagesBaseDir）。
  * 模块经 vi.resetModules() 逐用例重载，保证 imagesBaseDir 模块级状态相互隔离。
  */
@@ -15,12 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { generateMock, agentConfigs } = vi.hoisted(() => ({
   generateMock: vi.fn(),
   agentConfigs: [] as Array<Record<string, unknown>>,
-}));
-
-vi.mock('@ai-sdk/openai', () => ({
-  createOpenAI: vi.fn(
-    () => (modelId: string) => ({ provider: 'openai-compatible', modelId }),
-  ),
 }));
 
 vi.mock('@mastra/core/agent', () => ({
@@ -209,6 +202,28 @@ describe('SUMMARIZER_SYSTEM_PROMPT 与 Agent 构造（design 3.2 草案逐字锁
     const config = agentConfigs[0];
     expect(config.name).toBe('capture-summarizer');
     expect(config.instructions).toBe(SUMMARIZER_SYSTEM_PROMPT);
+  });
+
+  it('Agent model 为 Mastra 原生 custom endpoint 配置（id/url/apiKey，generate 时惰性求值）', async () => {
+    process.env.KIMI_API_KEY = 'test-kimi-key';
+    const { setAnalysisImagesBaseDir } = await import('./summarizer');
+    setAnalysisImagesBaseDir(makeTempDir());
+    generateMock.mockResolvedValueOnce({ object: { meaningful: false } });
+    const { analyzeCapture } = await import('./summarizer');
+
+    await analyzeCapture({ text: 'x', images: [] });
+
+    expect(agentConfigs).toHaveLength(1);
+    const model = agentConfigs[0].model as () => Record<string, unknown>;
+    expect(model()).toEqual({
+      id: 'custom/kimi-k2.6',
+      url: 'https://api.kimi.com/coding/v1',
+      apiKey: 'test-kimi-key',
+    });
+
+    // KIMI_MODEL 覆盖在 model 函数求值时生效（与 resolveKimiModel 语义一致）
+    process.env.KIMI_MODEL = 'kimi-custom-model';
+    expect((model() as { id: string }).id).toBe('custom/kimi-custom-model');
   });
 
   it('SUMMARIZER_SYSTEM_PROMPT 含门卫/摘要关键条款（手误、纯符号、60 字、图片是内容的一部分）', async () => {
