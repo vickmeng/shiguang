@@ -675,6 +675,94 @@ describe('读取侧 aiGrade（LEFT JOIN analyses.grade）', () => {
   });
 });
 
+describe('读取侧 aiProfiledAt（LEFT JOIN analyses.profiled_at）', () => {
+  let tmpDir: string;
+  let db: ReturnType<typeof initDatabase>;
+
+  beforeEach(() => {
+    const setup = setupDb();
+    tmpDir = setup.tmpDir;
+    db = setup.db;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  /** 手工直插 analyses 行并将 profiled_at 置为非空时间戳，绕开写侧 DAO。 */
+  function insertAnalyzed(recordId: number, summary: string): void {
+    db.prepare(
+      `INSERT INTO analyses (record_id, summary, model) VALUES (?, ?, 'kimi-k2.6')`,
+    ).run(recordId, summary);
+  }
+
+  function stamp(recordId: number, profiledAt: string): void {
+    db.prepare(`UPDATE analyses SET profiled_at = ? WHERE record_id = ?`).run(
+      profiledAt,
+      recordId,
+    );
+  }
+
+  it('profiled_at 非空的行经 listCaptures / queryCaptures / getById 读回 aiProfiledAt 为该值', () => {
+    const record = createCapture({ text: '已入像记录' });
+    insertAnalyzed(record.id, '摘要');
+    stamp(record.id, '2026-10-27T08:00:00.000Z');
+
+    expect(listCaptures().find((r) => r.id === record.id)?.aiProfiledAt).toBe(
+      '2026-10-27T08:00:00.000Z',
+    );
+
+    const queried = queryCaptures({ keyword: '已入像', page: 1, pageSize: 10 });
+    expect(queried.items[0].aiProfiledAt).toBe('2026-10-27T08:00:00.000Z');
+
+    expect(getById(record.id)?.aiProfiledAt).toBe('2026-10-27T08:00:00.000Z');
+  });
+
+  it('profiled_at 为 NULL 的行（或无 analyses 行）读回 aiProfiledAt 为 null', () => {
+    const analyzed = createCapture({ text: '未入像' });
+    insertAnalyzed(analyzed.id, '摘要');
+    const plain = createCapture({ text: '无摘要' });
+
+    const records = listCaptures();
+    expect(records.find((r) => r.id === analyzed.id)?.aiProfiledAt).toBeNull();
+    expect(records.find((r) => r.id === plain.id)?.aiProfiledAt).toBeNull();
+    expect(getById(analyzed.id)?.aiProfiledAt).toBeNull();
+  });
+
+  it('多附件记录 aiProfiledAt 在多个 JOIN 行下聚合正确（1:1 无行膨胀）', () => {
+    const record = createCaptureWithAttachments({
+      text: '',
+      sourceApp: null,
+      attachments: [
+        { filePath: 'images/p1.png', sizeBytes: 1 },
+        { filePath: 'images/p2.png', sizeBytes: 2 },
+      ],
+      analysis: { summary: '多图摘要', model: 'kimi-k2.6' },
+    });
+    stamp(record.id, '2026-10-27T09:00:00.000Z');
+
+    const found = listCaptures()[0];
+    expect(found.imagePaths).toEqual(['images/p1.png', 'images/p2.png']);
+    expect(found.aiProfiledAt).toBe('2026-10-27T09:00:00.000Z');
+  });
+
+  it('createCapture 纯文字直写返回的记录 aiProfiledAt 为 null（RETURNING 补 NULL 列）', () => {
+    const record = createCapture({ text: 'hello shiguang' });
+
+    expect(record.aiProfiledAt).toBeNull();
+  });
+
+  it('createCaptureWithAttachments 返回的记录 aiProfiledAt 为 null', () => {
+    const record = createCaptureWithAttachments({
+      text: '图文',
+      attachments: [{ filePath: 'images/no-profiled.png', sizeBytes: 1 }],
+      analysis: { summary: '一句话', model: 'kimi-k2.6' },
+    });
+
+    expect(record.aiProfiledAt).toBeNull();
+  });
+});
+
 describe('getById', () => {
   let tmpDir: string;
 

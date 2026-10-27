@@ -6,6 +6,7 @@
  */
 import { registerCaptureHandlers } from './captureHandlers';
 import { registerConsoleHandlers } from './consoleHandlers';
+import { registerProfileHandlers } from './profileHandlers';
 import { registerTagsHandlers } from './tagsHandlers';
 import { registerInputWindowIpc } from '../windows/inputWindow';
 import { registerPetWindowIpc } from '../windows/petWindow';
@@ -14,6 +15,7 @@ import { registerPetWindowIpc } from '../windows/petWindow';
 export function registerIpc(): void {
   registerCaptureHandlers();
   registerTagsHandlers();
+  registerProfileHandlers();
   registerConsoleHandlers();
   registerPetWindowIpc();
   registerInputWindowIpc();

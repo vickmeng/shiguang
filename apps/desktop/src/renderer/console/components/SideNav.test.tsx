@@ -10,14 +10,24 @@ describe('SideNav 侧边导航', () => {
     vi.restoreAllMocks();
   });
 
-  it('渲染三个导航项「记录/标签/设置」，按 records/tags/settings 顺序', () => {
+  it('渲染四个导航项「记录/标签/画像/设置」，按 records/tags/profile/settings 顺序', () => {
     render(<SideNav selected="records" onSelect={vi.fn()} />);
 
     const buttons = screen.getAllByRole('button');
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(4);
     expect(buttons[0].textContent).toBe('记录');
     expect(buttons[1].textContent).toBe('标签');
-    expect(buttons[2].textContent).toBe('设置');
+    expect(buttons[2].textContent).toBe('画像');
+    expect(buttons[3].textContent).toBe('设置');
+  });
+
+  it('点击「画像」回调 onSelect(\'profile\')', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(<SideNav selected="records" onSelect={onSelect} />);
+
+    await user.click(screen.getByRole('button', { name: '画像' }));
+    expect(onSelect).toHaveBeenCalledWith('profile');
   });
 
   it('点击「标签」回调 onSelect(\'tags\')，选中项高亮', async () => {

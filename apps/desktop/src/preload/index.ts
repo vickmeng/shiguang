@@ -15,6 +15,8 @@ import {
   type DeleteTagPayload,
   type QueryCapturesPayload,
   type QueryCapturesResult,
+  type ProfileStatusPayload,
+  type ProfileSummarizeResult,
   type RenameTagPayload,
   type SetLastTagsPayload,
   type Tag,
@@ -45,6 +47,12 @@ export interface ShiguangApi {
     lastGet(): Promise<string[]>;
     /** 记忆本次提交的标签组合（与库条目解耦） */
     lastSet(payload: SetLastTagsPayload): Promise<void>;
+  };
+  profile: {
+    /** 读取当前用户画像状态（画像文档 + 上次汇总时间 + 待汇总数 + 是否汇总中） */
+    get(): Promise<ProfileStatusPayload>;
+    /** 立即触发一次画像汇总（单飞：汇总中调用为幂等 no-op） */
+    summarize(): Promise<ProfileSummarizeResult>;
   };
   console: {
     /** 打开（或聚焦）后台管理窗口 */
@@ -81,6 +89,10 @@ const api: ShiguangApi = {
     delete: (payload) => ipcRenderer.invoke(IPC.tagsDelete, payload),
     lastGet: () => ipcRenderer.invoke(IPC.tagsLastGet),
     lastSet: (payload) => ipcRenderer.invoke(IPC.tagsLastSet, payload),
+  },
+  profile: {
+    get: () => ipcRenderer.invoke(IPC.profileGet),
+    summarize: () => ipcRenderer.invoke(IPC.profileSummarize),
   },
   console: {
     open: () => ipcRenderer.send(IPC.consoleOpen),

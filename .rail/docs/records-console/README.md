@@ -24,6 +24,7 @@
 - **级别（grade）筛选走 `records.id IN (SELECT record_id FROM analyses WHERE grade = ?)` 子查询形态**：total 的 COUNT 在 records 单表执行（既有架构，analyses 列无法直接在 COUNT 里引用），WHERE 与 COUNT 共用同一 conditions/params 保证两侧语义一致；`grade = ?` 天然不匹配 NULL，无分级记录被筛选排除；不选 JOIN 后 HAVING/COUNT 重写——破坏既有 total/items 共用结构。
 - **详情弹窗直接用列表行 record 对象，不新增 IPC 查询**：列表 LEFT JOIN 已带全量字段（document/aiSummary/aiGrade），新增查询是多余 round trip；弹窗中记录被删（单删/批删）时在既有删除成功回调内 `setDetailId(null)` 同步关弹窗，不引入新订阅。
 - **级别徽标为纯展示 Tailwind 常量（high 红 / mid 中性实底 / low 描边灰），不进 tagColorMap 色板体系**：级别是固定三档语义色、非用户数据，与标签动态色体系正交；GradeBadge helper 单点渲染，表格级别列与弹窗元信息行复用同一逻辑。
+- **console 第四页（画像）落地时三元链改 `PAGES: Record<ConsolePage, React.ComponentType>` 模块级映射（`apps/desktop/src/renderer/console/App.tsx:17`），替代嵌套三元链**：ConsolePage 每增一页三元链多一层嵌套，Record 强制键齐全使漏页编译期暴露；趁画像页同 PR 偿还腐化债，避免三元链再加一层。
 
 ## 技术债务
 

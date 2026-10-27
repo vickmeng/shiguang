@@ -5,13 +5,16 @@
  * M1 装配：app ready 后隐藏 Dock，依次创建宠物悬浮窗（右下角 idle）、
  * 系统托盘（退出入口）、注册 IPC handler、创建输入框窗口（初始隐藏，
  * 由宠物单击经显隐协调状态机唤出）。
+ * 画像汇总后台编排：数据库初始化后注入 profileDao 同一连接，
+ * app ready 后触发一次汇总判定并启动 10 分钟周期定时器。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { config as loadEnv } from 'dotenv';
 import { app } from 'electron';
-import { initDatabase, setAnalysisImagesBaseDir, setCaptureDatabase, setTagDatabase } from '@shiguang/ai';
+import { initDatabase, setAnalysisImagesBaseDir, setCaptureDatabase, setProfileDatabase, setTagDatabase } from '@shiguang/ai';
 import { createPetWindow } from './windows/petWindow';
+import { maybeSummarize, startProfileTimer } from './profile/profileRunner';
 import { createInputWindow } from './windows/inputWindow';
 import { createTray } from './tray';
 import { registerIpc } from './ipc/registerIpc';
@@ -42,6 +45,7 @@ const dbPath = path.join(app.getPath('userData'), 'shiguang.db');
 const db = initDatabase(dbPath);
 setCaptureDatabase(db);
 setTagDatabase(db);
+setProfileDatabase(db);
 
 // analyzeCapture 依赖相对 filePath 的 base 目录（writeImageFiles 落盘相对路径）；
 // 与库同根注入 userData，缺此注入 analyzeCapture 会抛「images base dir not initialized」。
@@ -57,6 +61,11 @@ app.whenReady().then(() => {
   createTray();
   registerIpc();
   createInputWindow();
+
+  // 画像汇总后台编排：启动即判定一次（待汇总积压/距上次尝试超时），
+  // 再交给 10 分钟周期定时器持续触发；maybeSummarize 内部已防竞争态与失败抛错。
+  maybeSummarize();
+  startProfileTimer();
 
   console.log(`[shiguang] main process started, db: ${dbPath}`);
 });

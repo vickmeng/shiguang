@@ -48,6 +48,7 @@ function createApiMock(total: number): ShiguangApi {
     console: {
       open: vi.fn(),
     },
+    profile: { get: vi.fn(), summarize: vi.fn() },
     input: {
       blur: vi.fn(),
       close: vi.fn(),
@@ -596,6 +597,7 @@ describe('RecordsPage 记录页', () => {
           copyImage: vi.fn(),
         },
         console: { open: vi.fn() },
+        profile: { get: vi.fn(), summarize: vi.fn() },
         input: { blur: vi.fn(), close: vi.fn() },
         pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
         tags: {
@@ -682,6 +684,7 @@ describe('RecordsPage 记录页', () => {
           copyImage: vi.fn(),
         },
         console: { open: vi.fn() },
+        profile: { get: vi.fn(), summarize: vi.fn() },
         input: { blur: vi.fn(), close: vi.fn() },
         pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
         tags: {
@@ -862,6 +865,7 @@ describe('RecordsPage 记录页', () => {
           copyImage: vi.fn(),
         },
         console: { open: vi.fn() },
+        profile: { get: vi.fn(), summarize: vi.fn() },
         input: { blur: vi.fn(), close: vi.fn() },
         pet: { clicked: vi.fn(), onSetState: vi.fn(() => () => {}) },
         tags: {

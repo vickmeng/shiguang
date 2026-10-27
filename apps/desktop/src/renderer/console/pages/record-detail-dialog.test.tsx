@@ -148,6 +148,36 @@ describe('RecordDetailDialog 记录详情弹窗', () => {
     expect(undefContainer.textContent).not.toMatch(/[高中低]/);
   });
 
+  it('元信息行：aiSummary 与 aiProfiledAt 均非空时渲染「已入像」徽标', () => {
+    renderDialog({
+      record: makeRecord({
+        aiSummary: '这是一句摘要',
+        aiProfiledAt: '2024-05-02T00:00:00.000Z',
+      }),
+    });
+
+    const dialog = screen.getByRole('dialog');
+    const header = dialog.querySelector('.record-detail-header');
+    expect(header).toBeTruthy();
+    const badge = screen.getByText('已入像');
+    expect(header!.contains(badge)).toBe(true);
+    expect(badge.className).toContain('border-neutral-200');
+    expect(badge.className).toContain('text-neutral-400');
+  });
+
+  it('元信息行：aiProfiledAt 为 null 或 aiSummary 为 null 时不渲染「已入像」徽标', () => {
+    const { container: nullProfiledContainer } = renderDialog({
+      record: makeRecord({ aiSummary: '这是一句摘要', aiProfiledAt: null }),
+    });
+    expect(nullProfiledContainer.textContent).not.toContain('已入像');
+    cleanup();
+
+    const { container: nullSummaryContainer } = renderDialog({
+      record: makeRecord({ aiSummary: null, aiProfiledAt: '2024-05-02T00:00:00.000Z' }),
+    });
+    expect(nullSummaryContainer.textContent).not.toContain('已入像');
+  });
+
   it('只读：不渲染复制/删除按钮', () => {
     renderDialog({ record: makeRecord({ imagePaths: ['images/a.png'] }) });
     expect(screen.queryByRole('button', { name: /复制记录/ })).toBeNull();

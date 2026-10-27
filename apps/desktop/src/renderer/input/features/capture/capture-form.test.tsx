@@ -53,6 +53,10 @@ function createApiMock() {
     console: {
       open: vi.fn(),
     },
+    profile: {
+      get: vi.fn(),
+      summarize: vi.fn(),
+    },
     input: {
       blur: vi.fn(),
       close: vi.fn(),

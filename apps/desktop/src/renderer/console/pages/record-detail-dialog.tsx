@@ -22,7 +22,8 @@
  * 全文区复用 RichCapturePreview 并传 expanded=true——表格无内容预览列后，
  * expanded 语义仅由本弹窗消费（行内 expand 机制已随表格化整体移除）；
  * 元信息行（时间 / 级别徽标 / 标签 chips）与 RecordRow 同款渲染逻辑，
- * 级别徽标映射（GradeBadge）由本文件导出供 RecordRow import 复用，避免双份漂移；
+ * 级别徽标映射（GradeBadge）与已入像徽标（ProfiledBadge）由本文件导出
+ * 供 RecordRow import 复用，避免双份漂移；
  * 只读：不渲染复制/删除按钮，关闭仅走遮罩点击与「×」按钮（不做 ESC）。
  */
 import * as React from 'react';
@@ -48,6 +49,15 @@ export function GradeBadge({ grade }: { grade: Grade }) {
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs ${GRADE_BADGE_CLASS[grade]}`}>
       {GRADE_BADGE_LABEL[grade]}
+    </span>
+  );
+}
+
+/** 已入像徽标：analyses.profiled_at 非空即已纳入画像汇总；纯展示 Tailwind 常量，不进 tagColorMap */
+export function ProfiledBadge(): JSX.Element {
+  return (
+    <span className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-400">
+      已入像
     </span>
   );
 }
@@ -114,7 +124,8 @@ export function RecordDetailDialog({ open, record, tagColors, onClose }: RecordD
           ×
         </button>
         {/* 元信息行（头部，固定不滚动；record-detail-header 兼作 Rnd 拖拽把手）：
-            时间 / 级别徽标 / 标签 chips（实心 chips 与 RecordRow 同款） */}
+            时间 / 级别徽标 / 标签 chips（实心 chips 与 RecordRow 同款）/
+            已入像徽标（aiSummary 与 aiProfiledAt 均非空时渲染） */}
         <div className="record-detail-header flex flex-wrap items-center gap-2 border-b border-neutral-100 px-5 pb-3 pr-10 pt-4">
           <span className="text-xs text-neutral-400">
             {new Date(record.createdAt).toLocaleString()}
@@ -135,6 +146,7 @@ export function RecordDetailDialog({ open, record, tagColors, onClose }: RecordD
               </span>
             );
           })}
+          {record.aiSummary && record.aiProfiledAt ? <ProfiledBadge /> : null}
         </div>
         {/* 全文区：唯一滚动容器（头部/关闭按钮固定）；document 混排忠实渲染，expanded 展开态；
             select-text 放开全局 user-select:none，支持鼠标滑动选中正文 */}

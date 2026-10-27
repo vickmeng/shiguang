@@ -14,7 +14,8 @@ import type {
  *
  * 读取侧（listCaptures / queryCaptures / getById）共用 SELECT_RECORDS_JOIN 模板：
  * records 行 + LEFT JOIN attachments（1:N，JS 侧聚合为有序 imagePaths）与
- * LEFT JOIN analyses（record_id 主键 1:1，读回 aiSummary 与 aiGrade，无行膨胀）。
+ * LEFT JOIN analyses（record_id 主键 1:1，读回 aiSummary、aiGrade 与
+ * aiProfiledAt，无行膨胀）。
  */
 let db: Database.Database | null = null;
 
@@ -36,6 +37,8 @@ interface RecordRow {
   ai_summary: string | null;
   /** LEFT JOIN analyses 得到的 AI 分级，grade 为 NULL 时为 null */
   ai_grade: string | null;
+  /** LEFT JOIN analyses 得到的纳入画像汇总时间戳，NULL = 未纳入 */
+  ai_profiled_at: string | null;
 }
 
 /**
@@ -44,7 +47,7 @@ interface RecordRow {
  * 为 1:N，多附件记录展开为多行，由 toRecords 按 record_id 聚合。
  */
 const SELECT_RECORDS_JOIN = `
-  SELECT records.*, attachments.file_path AS image_path, analyses.summary AS ai_summary, analyses.grade AS ai_grade
+  SELECT records.*, attachments.file_path AS image_path, analyses.summary AS ai_summary, analyses.grade AS ai_grade, analyses.profiled_at AS ai_profiled_at
   FROM records
   LEFT JOIN attachments ON attachments.record_id = records.id
   LEFT JOIN analyses ON analyses.record_id = records.id
@@ -91,6 +94,7 @@ function toRecord(row: RecordRow): CaptureRecord {
     imagePaths: row.image_path === null ? [] : [row.image_path],
     aiSummary: row.ai_summary,
     aiGrade: (row.ai_grade as Grade | null) ?? null,
+    aiProfiledAt: row.ai_profiled_at,
   };
 }
 
@@ -133,7 +137,7 @@ export function createCapture(
     .prepare(
       `INSERT INTO records (text, document, source_app, tags, created_at)
        VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-       RETURNING *, NULL AS image_path, NULL AS ai_summary, NULL AS ai_grade`,
+       RETURNING *, NULL AS image_path, NULL AS ai_summary, NULL AS ai_grade, NULL AS ai_profiled_at`,
     )
     .get(
       input.text,
@@ -184,7 +188,7 @@ export function createCaptureWithAttachments(input: {
         input.document ?? null,
         input.sourceApp ?? null,
         JSON.stringify(input.tags ?? []),
-      ) as unknown as Omit<RecordRow, 'image_path' | 'ai_summary' | 'ai_grade'>;
+      ) as unknown as Omit<RecordRow, 'image_path' | 'ai_summary' | 'ai_grade' | 'ai_profiled_at'>;
 
     const insertAttachment = database.prepare(
       `INSERT INTO attachments (record_id, file_path, size_bytes, created_at)
@@ -207,7 +211,7 @@ export function createCaptureWithAttachments(input: {
         );
     }
 
-    const record = toRecord({ ...row, image_path: null, ai_summary: null, ai_grade: null });
+    const record = toRecord({ ...row, image_path: null, ai_summary: null, ai_grade: null, ai_profiled_at: null });
     record.tags = input.tags ?? [];
     record.imagePaths = input.attachments.map((attachment) => attachment.filePath);
     return record;

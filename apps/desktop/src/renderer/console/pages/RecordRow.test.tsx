@@ -18,6 +18,7 @@ function makeTextRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
     tags: [],
     aiSummary: null,
     aiGrade: null,
+    aiProfiledAt: null,
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function makeImageRecord(overrides: Partial<CaptureRecord> = {}): CaptureRecord 
     tags: [],
     aiSummary: null,
     aiGrade: null,
+    aiProfiledAt: null,
     ...overrides,
   };
 }
@@ -141,6 +143,43 @@ describe('RecordRow 记录表格行', () => {
     const { container: undefContainer } = renderRow({ record: withoutSummary });
     expect(undefContainer.textContent).toContain('—');
     expect(undefContainer.querySelector('td:nth-child(3) button')).toBeNull();
+  });
+
+  it('aiSummary 非空且 aiProfiledAt 非空时摘要旁渲染「已入像」徽标', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({
+        aiSummary: '这是一句摘要',
+        aiProfiledAt: '2024-05-02T00:00:00.000Z',
+      }),
+    });
+    const summaryTd = container.querySelector('td:nth-child(3)') as HTMLElement;
+    const badge = screen.getByText('已入像');
+    // 徽标位于摘要 td 内、与摘要同行（flex 容器）
+    expect(summaryTd.contains(badge)).toBe(true);
+    expect(summaryTd.querySelector('.flex')).toBeTruthy();
+    expect(badge.className).toContain('border');
+    expect(badge.className).toContain('border-neutral-200');
+    expect(badge.className).toContain('text-neutral-400');
+    // 摘要文本与徽标同时存在，徽标不干扰点击文案
+    expect(summaryTd.textContent).toContain('这是一句摘要');
+  });
+
+  it('aiSummary 非空但 aiProfiledAt 为 null 时不渲染「已入像」徽标', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({ aiSummary: '这是一句摘要', aiProfiledAt: null }),
+    });
+    expect(container.textContent).not.toContain('已入像');
+  });
+
+  it('aiSummary 为 null 时占位「—」分支不渲染「已入像」徽标', () => {
+    const { container } = renderRow({
+      record: makeTextRecord({
+        aiSummary: null,
+        aiProfiledAt: '2024-05-02T00:00:00.000Z',
+      }),
+    });
+    expect(container.textContent).toContain('—');
+    expect(container.textContent).not.toContain('已入像');
   });
 
   it('aiGrade 各分支渲染徽标类名与文案：high→bg-red-50「高」', () => {

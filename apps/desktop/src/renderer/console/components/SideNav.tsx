@@ -1,15 +1,16 @@
 /**
- * 后台 console 左侧导航栏：渲染「记录」「标签」「设置」三个导航项——
+ * 后台 console 左侧导航栏：渲染「记录」「标签」「画像」「设置」四个导航项——
  * 点击切换 App.tsx 下发的 onSelect；选中项高亮。
  */
 import * as React from 'react';
 import { cn } from '../../input/lib/utils';
 
-export type ConsolePage = 'records' | 'tags' | 'settings';
+export type ConsolePage = 'records' | 'tags' | 'profile' | 'settings';
 
 const NAV_ITEMS: { key: ConsolePage; label: string }[] = [
   { key: 'records', label: '记录' },
   { key: 'tags', label: '标签' },
+  { key: 'profile', label: '画像' },
   { key: 'settings', label: '设置' },
 ];
 

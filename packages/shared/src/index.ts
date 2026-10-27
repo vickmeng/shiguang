@@ -27,6 +27,8 @@ export interface CaptureRecord {
   aiSummary?: string | null;
   /** AI 摘要分级（analyses.grade）；无分级（grade 为 NULL）的记录为 null/undefined */
   aiGrade?: Grade | null;
+  /** 曾纳入画像汇总的时间戳（analyses.profiled_at）；NULL/undefined = 未纳入 */
+  aiProfiledAt?: string | null;
 }
 
 /** 标签条目；color 为创建时从 TAG_COLOR_PALETTE 随机取值的 hex */
@@ -75,6 +77,10 @@ export const IPC = {
   tagsLastGet: 'tags:lastGet',
   /** invoke：记忆本次提交的标签组合 */
   tagsLastSet: 'tags:lastSet',
+  /** invoke：读取画像状态（画像文档 + 上次汇总时间 + 待汇总数 + 汇总中标记） */
+  profileGet: 'profile:get',
+  /** invoke：立即触发画像汇总 */
+  profileSummarize: 'profile:summarize',
 } as const;
 
 /**
@@ -144,3 +150,29 @@ export interface SetLastTagsPayload {
 
 /** capture:create 无意义判定时主进程抛出的固定错误文案；渲染层据此区分 toast 文案 */
 export const AI_NOT_MEANINGFUL_MESSAGE = '内容未拾光：AI 判定无有效信息';
+
+/**
+ * AI 用户画像：固定 5+1 槽位；key 英文，中文展示文案由前端映射：身份概况/最近关注/兴趣爱好/在意的事/长期方向/其他
+ */
+export interface ProfileDocument {
+  identity: string[];
+  recent: string[];
+  interests: string[];
+  values: string[];
+  goals: string[];
+  misc: string[];
+}
+
+/** profile:get 响应 */
+export interface ProfileStatusPayload {
+  document: ProfileDocument | null;
+  updatedAt: string | null;
+  pendingCount: number;
+  running: boolean;
+}
+
+/** profile:summarize 响应 */
+export interface ProfileSummarizeResult {
+  ok: boolean;
+  error?: string;
+}

@@ -10,6 +10,7 @@ import { migration as dropTypeMigration } from './migrations/0003_drop_type';
 import { migration as tagsMigration } from './migrations/0004_tags';
 import { migration as analysesMigration } from './migrations/0005_analyses';
 import { migration as analysesGradeMigration } from './migrations/0006_analyses_grade';
+import { migration as profileMigration } from './migrations/0007_profile';
 
 describe('initDatabase', () => {
   let tmpDir: string;
@@ -87,6 +88,7 @@ describe('initDatabase', () => {
       '0004_tags',
       '0005_analyses',
       '0006_analyses_grade',
+      '0007_profile',
     ]);
 
     db2.close();
@@ -528,6 +530,145 @@ describe('迁移 0006_analyses_grade', () => {
       expect.arrayContaining(['record_id', 'summary', 'model', 'created_at']),
     );
 
+    const row = db
+      .prepare(`SELECT summary, model FROM analyses WHERE record_id = ?`)
+      .get(recordId) as { summary: string; model: string };
+    expect(row).toEqual({ summary: '一句话摘要', model: 'kimi-k2.6' });
+
+    db.close();
+  });
+});
+
+describe('迁移 0007_profile', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-migration-0007-test-'));
+    dbPath = join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('迁移后 analyses 含可空 profiled_at 列（无默认值），profiles 表含 CHECK (id = 1)', () => {
+    const db = initDatabase(dbPath);
+
+    const cols = db
+      .prepare('PRAGMA table_info(analyses)')
+      .all() as unknown as Array<{ name: string; notnull: number; dflt_value: string | null }>;
+    const profiledAtCol = cols.find((c) => c.name === 'profiled_at');
+    expect(profiledAtCol).toBeDefined();
+    expect(profiledAtCol!.notnull).toBe(0);
+    expect(profiledAtCol!.dflt_value).toBeNull();
+
+    const profilesSql = (
+      db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'profiles'`).get() as {
+        sql: string;
+      }
+    ).sql;
+    expect(profilesSql).toContain('CHECK (id = 1)');
+    expect(profilesSql).toContain('document TEXT NOT NULL');
+    expect(profilesSql).toContain('updated_at TEXT NOT NULL');
+
+    db.close();
+  });
+
+  it('旧库（0006 态已有 analyses 行）升级后现有行不受影响（profiled_at 读出 NULL）', () => {
+    // 手工构造仅应用 0001~0006 的"旧库"并写入 records + analyses 行
+    const oldDb = new Database(dbPath);
+    oldDb.pragma('foreign_keys = ON');
+    void migration.up({ context: oldDb });
+    void attachmentMigration.up({ context: oldDb });
+    void dropTypeMigration.up({ context: oldDb });
+    void tagsMigration.up({ context: oldDb });
+    void analysesMigration.up({ context: oldDb });
+    void analysesGradeMigration.up({ context: oldDb });
+    oldDb.prepare(`INSERT INTO records (text) VALUES ('旧记录')`).run();
+    const oldRecordId = Number(
+      (oldDb.prepare(`SELECT id FROM records WHERE text = '旧记录'`).get() as { id: number }).id,
+    );
+    oldDb.prepare(`INSERT INTO analyses (record_id, summary, model, grade) VALUES (?, ?, ?, ?)`).run(
+      oldRecordId,
+      '旧摘要',
+      'kimi-k2.6',
+      'high',
+    );
+    oldDb.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+    for (const name of [
+      migration.name,
+      attachmentMigration.name,
+      dropTypeMigration.name,
+      tagsMigration.name,
+      analysesMigration.name,
+      analysesGradeMigration.name,
+    ]) {
+      oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(name);
+    }
+    oldDb.close();
+
+    // 再次 initDatabase：应跳过 0001~0006、仅应用 0007
+    const db = initDatabase(dbPath);
+
+    const oldAnalysis = db
+      .prepare(`SELECT summary, grade, profiled_at FROM analyses WHERE record_id = ?`)
+      .get(oldRecordId) as { summary: string; grade: string; profiled_at: string | null };
+    expect(oldAnalysis).toEqual({ summary: '旧摘要', grade: 'high', profiled_at: null });
+
+    // 新行可写 profiled_at（可空列允许带/不带写入）
+    db.prepare(`INSERT INTO records (text) VALUES ('新记录')`).run();
+    const newRecordId = Number(
+      (db.prepare(`SELECT id FROM records WHERE text = '新记录'`).get() as { id: number }).id,
+    );
+    db.prepare(`INSERT INTO analyses (record_id, summary, model, profiled_at) VALUES (?, ?, ?, ?)`).run(
+      newRecordId,
+      '新摘要',
+      'kimi-k2.6',
+      '2026-10-27T00:00:00.000Z',
+    );
+    const newAnalysis = db
+      .prepare(`SELECT profiled_at FROM analyses WHERE record_id = ?`)
+      .get(newRecordId) as { profiled_at: string };
+    expect(newAnalysis.profiled_at).toBe('2026-10-27T00:00:00.000Z');
+
+    db.close();
+  });
+
+  it('migration.down() 后 analyses 不再含 profiled_at 列，profiles 表消失', async () => {
+    const db = initDatabase(dbPath);
+    db.prepare(`INSERT INTO records (text) VALUES ('带画像戳的记录')`).run();
+    const recordId = Number(
+      (db.prepare(`SELECT id FROM records WHERE text = '带画像戳的记录'`).get() as { id: number })
+        .id,
+    );
+    db.prepare(`INSERT INTO analyses (record_id, summary, model, profiled_at) VALUES (?, ?, ?, ?)`).run(
+      recordId,
+      '一句话摘要',
+      'kimi-k2.6',
+      '2026-10-27T00:00:00.000Z',
+    );
+    db.prepare(`INSERT INTO profiles (id, document, updated_at) VALUES (1, ?, ?)`).run(
+      '{"identity":["程序员"]}',
+      '2026-10-27T00:00:00.000Z',
+    );
+
+    await profileMigration.down({ context: db });
+
+    const cols = db
+      .prepare('PRAGMA table_info(analyses)')
+      .all() as unknown as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).not.toContain('profiled_at');
+    expect(cols.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['record_id', 'summary', 'model', 'created_at']),
+    );
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'profiles'")
+      .all();
+    expect(tables).toEqual([]);
+
+    // analyses 既有数据不受 down 影响
     const row = db
       .prepare(`SELECT summary, model FROM analyses WHERE record_id = ?`)
       .get(recordId) as { summary: string; model: string };

@@ -9,6 +9,9 @@
  * hover 强化 text-neutral-900 / decoration-neutral-500：
  * record.aiSummary 非空时点击回调 onOpenDetail（父级打开详情弹窗）；
  * null/undefined（无摘要的存量记录）渲染不可点击占位「—」（无下划线/手型）。
+ * 已入像徽标：aiSummary 非空且 record.aiProfiledAt 非空（曾纳入画像汇总）时，
+ * 在摘要文本元素后、同一行（flex 容器）以 ml-2 间距渲染 <ProfiledBadge />
+ * （复用 record-detail-dialog 导出，与详情弹窗元信息行同条件防双份漂移）。
  * 级别 td 按 record.aiGrade 渲染三档徽标（复用 record-detail-dialog 导出的
  * GradeBadge，避免双份映射漂移）；NULL/undefined（AI 未分级）时 td 留空。
  * 标签 td 沿用实心 chips 逻辑：底色 = 标签色 + 名称，底色取父级下发的
@@ -26,7 +29,7 @@ import * as React from 'react';
 import type { CaptureRecord } from '@shiguang/shared';
 import { toast } from '../../components/ui/toast';
 import { tagTextColor } from '../../lib/tagTextColor';
-import { GradeBadge } from './record-detail-dialog';
+import { GradeBadge, ProfiledBadge } from './record-detail-dialog';
 
 export interface RecordRowProps {
   record: CaptureRecord;
@@ -71,12 +74,19 @@ export function RecordRow({ record, selected, tagColors, onToggleSelect, onOpenD
       {/* 摘要列：整格可点击弹详情（普通文本可滑动选中）；无摘要渲染不可点击占位 */}
       <td className="p-3 max-w-md">
         {record.aiSummary ? (
-          <span
-            onClick={onOpenDetail}
-            className="block w-full cursor-pointer select-text text-left text-sm text-neutral-700 line-clamp-2 underline decoration-dashed decoration-neutral-300 underline-offset-2 hover:text-neutral-900 hover:decoration-neutral-500"
-          >
-            {record.aiSummary}
-          </span>
+          <div className="flex items-start">
+            <span
+              onClick={onOpenDetail}
+              className="min-w-0 flex-1 cursor-pointer select-text text-left text-sm text-neutral-700 line-clamp-2 underline decoration-dashed decoration-neutral-300 underline-offset-2 hover:text-neutral-900 hover:decoration-neutral-500"
+            >
+              {record.aiSummary}
+            </span>
+            {record.aiProfiledAt ? (
+              <span className="ml-2 shrink-0">
+                <ProfiledBadge />
+              </span>
+            ) : null}
+          </div>
         ) : (
           <span className="text-sm text-neutral-300">—</span>
         )}

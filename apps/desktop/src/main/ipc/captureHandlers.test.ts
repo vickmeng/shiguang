@@ -22,6 +22,10 @@
  * AI 返回 grade 时原样透传，未返回时 grade: null 存 NULL，不阻塞入库）；
  * try 块内任一步抛错均逐个 fs.rm(force) 清理已写图片后原样 rethrow，DAO 零调用。
  *
+ * 画像汇总钩子（ai-user-profile 任务 19）：createCaptureWithAttachments 成功
+ * resolve 之后、try/catch 之外 fire-and-forget 调 maybeSummarize（汇总失败
+ * 绝不影响 capture 响应，AI 分析失败路径不触发钩子）。
+ *
  * mock electron 的 ipcMain/nativeImage/clipboard/app 与 @shiguang/ai 的
  * getById（DAO 真行为由 captureDao.test.ts 覆盖；queryCaptures 仍由
  * captureList 消费，断言 copy-image 零调用），断言：
@@ -69,6 +73,7 @@ const { stubs, image } = vi.hoisted(() => {
       createCaptureWithAttachments: vi.fn(),
       analyzeCapture: vi.fn(),
       resolveKimiModel: vi.fn(),
+      maybeSummarize: vi.fn(),
     },
   };
 });
@@ -98,7 +103,12 @@ vi.mock('../screenshot/screenshotService', () => ({
   writeImageFiles: vi.fn(),
 }));
 
+vi.mock('../profile/profileRunner', () => ({
+  maybeSummarize: stubs.maybeSummarize,
+}));
+
 import { writeImageFiles } from '../screenshot/screenshotService';
+import { maybeSummarize } from '../profile/profileRunner';
 import { registerCaptureHandlers } from './captureHandlers';
 
 function record(partial: Partial<CaptureRecord>): CaptureRecord {
@@ -412,6 +422,59 @@ describe('capture:create AI 分析编排', () => {
     expect(stubs.fs.promises.rm).toHaveBeenCalledWith(path.join(USER_DATA, 'images/a.png'), {
       force: true,
     });
+  });
+});
+
+describe('capture:create 画像汇总钩子', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // AI 分析默认成功；钩子为 fire-and-forget，默认 resolve
+    stubs.analyzeCapture.mockResolvedValue({ meaningful: true, summary: '默认摘要' });
+    stubs.resolveKimiModel.mockReturnValue('kimi-k2.6');
+    stubs.maybeSummarize.mockResolvedValue(undefined);
+  });
+
+  const written = [{ filePath: 'images/a.png', sizeBytes: 3 }];
+  const payload: CreateCapturePayload = {
+    text: '图文混排',
+    document: null,
+    images: [{ data: new Uint8Array([1]), sizeBytes: 3 }],
+  };
+
+  it('createCaptureWithAttachments resolve 后 maybeSummarize 被调一次，capture 响应为 DAO 返回记录', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    const created = record({ id: 20 });
+    stubs.createCaptureWithAttachments.mockResolvedValue(created);
+
+    const result = await invokeCreate(payload);
+
+    expect(result).toBe(created);
+    await vi.waitFor(() => expect(maybeSummarize).toHaveBeenCalledTimes(1));
+  });
+
+  it('maybeSummarize reject：capture 响应仍正常 resolve（汇总失败绝不影响 capture），console.error 留痕', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    const created = record({ id: 21 });
+    stubs.createCaptureWithAttachments.mockResolvedValue(created);
+    stubs.maybeSummarize.mockRejectedValue(new Error('汇总失败'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await invokeCreate(payload);
+
+    expect(result).toBe(created);
+    await vi.waitFor(() =>
+      expect(errSpy).toHaveBeenCalledWith(expect.any(Error)),
+    );
+    errSpy.mockRestore();
+  });
+
+  it('createCaptureWithAttachments reject：invoke 原样拒绝且 maybeSummarize 未被调（钩子不越过既有失败路径）', async () => {
+    vi.mocked(writeImageFiles).mockResolvedValue(written);
+    stubs.createCaptureWithAttachments.mockRejectedValue(new Error('入库失败'));
+
+    await expect(invokeCreate(payload)).rejects.toThrow('入库失败');
+
+    expect(maybeSummarize).not.toHaveBeenCalled();
   });
 });
 

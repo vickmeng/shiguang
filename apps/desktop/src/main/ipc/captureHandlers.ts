@@ -18,6 +18,10 @@
  * payload.tags（标签名快照）原样转发，缺省 undefined 由 DAO 侧归一入库 '[]'；
  * 写盘抛错时 invoke 被拒绝，渲染侧 catch 提示。
  *
+ * 画像汇总钩子（ai-user-profile）：capture:create 成功入库后触发画像汇总
+ * 判定（fire-and-forget，失败绝不影响 capture 响应）；钩子挂在成功 return
+ * 之后、try/catch 之外，AI 分析失败路径（catch 清理重抛）不触发。
+ *
  * AI 分析编排（ai-record-summary）：writeImageFiles 落盘成功后进入 try 块——
  * 依次 analyzeCapture（@shiguang/ai，Kimi 多模态门卫 + 一句话摘要，输入为
  * written 相对路径）；!analysis.meaningful 或 summary.trim() 为空时抛
@@ -49,8 +53,10 @@ import {
   resolveKimiModel,
 } from '@shiguang/ai';
 import { writeImageFiles } from '../screenshot/screenshotService';
+import { maybeSummarize } from '../profile/profileRunner';
 import { AI_NOT_MEANINGFUL_MESSAGE, IPC } from '@shiguang/shared';
 import type {
+  CaptureRecord,
   CopyImagePayload,
   CreateCapturePayload,
   QueryCapturesPayload,
@@ -88,6 +94,7 @@ export function registerCaptureHandlers(): void {
   ipcMain.handle(IPC.captureCreate, async (_event, payload: CreateCapturePayload) => {
     const written = await writeImageFiles(payload.images.map((img) => img.data));
     const writtenPaths = written.map((w) => w.filePath);
+    let created: CaptureRecord;
     try {
       const analysis = await analyzeCapture({
         text: payload.text,
@@ -98,7 +105,7 @@ export function registerCaptureHandlers(): void {
       if (!analysis.meaningful || !analysis.summary?.trim()) {
         throw new Error(AI_NOT_MEANINGFUL_MESSAGE);
       }
-      return createCaptureWithAttachments({
+      created = await createCaptureWithAttachments({
         text: payload.text,
         // design.md 决策 16：Lexical EditorState JSON 双写入 records.document 列。
         // 渲染层 payload.document 可空，缺省归一为 null；非空时把 image 节点的
@@ -130,6 +137,13 @@ export function registerCaptureHandlers(): void {
       }
       throw err;
     }
+    // 画像汇总钩子：createCaptureWithAttachments 成功入库后触发汇总判定，
+    // fire-and-forget 且 .catch 收尾——汇总失败绝不影响 capture 响应；
+    // 挂在 try/catch 之外，AI 分析失败路径（上方 catch 清理重抛）不触发。
+    void Promise.resolve()
+      .then(() => maybeSummarize())
+      .catch((e) => console.error(e));
+    return created;
   });
   ipcMain.handle(IPC.captureList, (_event, payload: QueryCapturesPayload) =>
     queryCaptures(payload),

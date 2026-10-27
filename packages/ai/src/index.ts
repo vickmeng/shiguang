@@ -4,6 +4,10 @@
  * 主进程通过 `import { initDatabase, setCaptureDatabase, ... } from '@shiguang/ai'`
  * 使用数据层与 capture:create 链路的 AI 分析（analyzeCapture：Kimi 多模态
  * 单步 Agent，门卫判定 + 一句话摘要）。
+ *
+ * 画像汇总链路（profileRunner）经本 barrel 消费 profileDao 导出
+ * （setProfileDatabase / getProfile / saveProfileWithStamp / pendingSummaries /
+ * pendingCount / PendingSummary）与 profiler 导出（runProfileSummarization）。
  */
 export { initDatabase } from './db';
 export {
@@ -21,4 +25,13 @@ export {
   setAnalysisImagesBaseDir,
 } from './analysis/summarizer';
 export { setTagDatabase, listTags, createTag, renameTag, deleteTag } from './dao/tagDao';
+export {
+  setProfileDatabase,
+  getProfile,
+  saveProfileWithStamp,
+  pendingSummaries,
+  pendingCount,
+} from './dao/profileDao';
+export type { PendingSummary } from './dao/profileDao';
+export { runProfileSummarization } from './profile/profiler';
 export type { CaptureRecord } from '@shiguang/shared';
