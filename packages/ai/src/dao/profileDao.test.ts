@@ -9,6 +9,7 @@ import {
   getProfile,
   pendingCount,
   pendingSummaries,
+  recentMentions,
   saveProfileWithStamp,
   setProfileDatabase,
 } from './profileDao';
@@ -270,6 +271,106 @@ describe('profileDao 待汇总队列', () => {
   });
 });
 
+describe('profileDao 近期记录概览', () => {
+  let tmpDir: string;
+  let db: Database.Database;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-28T00:00:00.000Z'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-profile-dao-recent-test-'));
+    db = initDatabase(join(tmpDir, 'test.db'));
+    setProfileDatabase(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.useRealTimers();
+  });
+
+  /** 相对当前（fake 时间 2026-10-28T00:00:00Z）往前 N 天的 ISO 字符串 */
+  function isoDaysAgo(days: number): string {
+    return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  it('普通窗口内记录返回，analyzed 标记正确，按 created_at 倒序', () => {
+    const analyzedId = seedRecord(db, {
+      text: '窗口内-已分析',
+      tags: '["工作","AI"]',
+      grade: 'high',
+      createdAt: isoDaysAgo(3),
+      profiledAt: '2026-10-27T00:00:00.000Z',
+    });
+    const freshId = seedRecord(db, {
+      text: '窗口内-未分析',
+      tags: '[]',
+      grade: null,
+      createdAt: isoDaysAgo(1),
+    });
+
+    const list = recentMentions();
+
+    expect(list.map((m) => m.recordId)).toEqual([freshId, analyzedId]);
+    expect(list[0]).toEqual({
+      recordId: freshId,
+      createdAt: isoDaysAgo(1),
+      grade: null,
+      tags: [],
+      analyzed: false,
+      summary: '摘要-窗口内-未分析',
+    });
+    expect(list[1]).toMatchObject({
+      recordId: analyzedId,
+      grade: 'high',
+      tags: ['工作', 'AI'],
+      analyzed: true,
+      summary: '摘要-窗口内-已分析',
+    });
+  });
+
+  it('30 天窗口外的普通记录（grade 非 high）排除', () => {
+    seedRecord(db, { text: '窗口外-普通', grade: 'low', createdAt: isoDaysAgo(40) });
+
+    expect(recentMentions()).toEqual([]);
+  });
+
+  it('90 天窗口内（30 天外）的 grade=high 记录仍返回；超过 90 天的 high 记录排除', () => {
+    const high40 = seedRecord(db, { text: '40天前-high', grade: 'high', createdAt: isoDaysAgo(40) });
+    seedRecord(db, { text: '100天前-high', grade: 'high', createdAt: isoDaysAgo(100) });
+
+    const list = recentMentions();
+
+    expect(list.map((m) => m.recordId)).toEqual([high40]);
+  });
+
+  it('超过 RECENT_LIMIT=100 条时按 created_at 倒序截断为 100 条', () => {
+    for (let i = 0; i < 120; i += 1) {
+      // 均匀铺在 30 天窗口内（i 越小越新）
+      seedRecord(db, {
+        text: `第${i}条`,
+        createdAt: new Date(Date.now() - i * 6 * 60 * 60 * 1000).toISOString(),
+      });
+    }
+
+    const list = recentMentions();
+
+    expect(list).toHaveLength(100);
+    for (let i = 0; i < list.length - 1; i += 1) {
+      expect(list[i].createdAt >= list[i + 1].createdAt).toBe(true);
+    }
+  });
+
+  it('records.tags 为坏 JSON 时该条 tags 为 [] 不抛', () => {
+    seedRecord(db, { text: '坏标签', tags: '{broken', createdAt: isoDaysAgo(1) });
+
+    const list = recentMentions();
+
+    expect(list).toHaveLength(1);
+    expect(list[0].tags).toEqual([]);
+  });
+});
+
 describe('profileDao 未初始化', () => {
   it('未注入数据库时 getProfile / saveProfileWithStamp 抛初始化指引错误', async () => {
     vi.resetModules();
@@ -277,6 +378,7 @@ describe('profileDao 未初始化', () => {
 
     expect(() => fresh.getProfile()).toThrow(/profileDao: database not initialized/);
     expect(() => fresh.pendingSummaries()).toThrow(/profileDao: database not initialized/);
+    expect(() => fresh.recentMentions()).toThrow(/profileDao: database not initialized/);
     expect(() => fresh.pendingCount()).toThrow(/profileDao: database not initialized/);
     expect(() =>
       fresh.saveProfileWithStamp({

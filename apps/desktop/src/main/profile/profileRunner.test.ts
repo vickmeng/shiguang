@@ -22,13 +22,14 @@
  * （epoch）；每个用例经 vi.resetModules 重取模块，获得全新模块级 summarizeJob。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PendingSummary } from '@shiguang/ai';
+import type { PendingSummary, RecentMention } from '@shiguang/ai';
 import type { ProfileDocument } from '@shiguang/shared';
 
 const stubs = vi.hoisted(() => ({
   getProfile: vi.fn(),
   pendingCount: vi.fn(),
   pendingSummaries: vi.fn(),
+  recentMentions: vi.fn(),
   runProfileSummarization: vi.fn(),
   saveProfileWithStamp: vi.fn(),
 }));
@@ -37,6 +38,7 @@ vi.mock('@shiguang/ai', () => ({
   getProfile: stubs.getProfile,
   pendingCount: stubs.pendingCount,
   pendingSummaries: stubs.pendingSummaries,
+  recentMentions: stubs.recentMentions,
   runProfileSummarization: stubs.runProfileSummarization,
   saveProfileWithStamp: stubs.saveProfileWithStamp,
 }));
@@ -53,13 +55,24 @@ const DOCUMENT: ProfileDocument = {
   misc: [],
 };
 
-const BATCH: PendingSummary[] = [1, 2, 3, 4, 5].map((recordId) => ({
+const LATEST: PendingSummary[] = [1, 2, 3, 4, 5].map((recordId) => ({
   recordId,
   summary: `摘要${recordId}`,
   grade: recordId % 2 === 0 ? 'high' : null,
   tags: ['标签'],
   createdAt: '2026-10-01T00:00:00.000Z',
 }));
+
+const RECENT: RecentMention[] = [
+  {
+    recordId: 9,
+    createdAt: '2026-10-21T09:00:00.000Z',
+    grade: 'high',
+    tags: ['标签'],
+    summary: '摘要9',
+    analyzed: true,
+  },
+];
 
 function isoAgo(ms: number): string {
   return new Date(Date.now() - ms).toISOString();
@@ -79,7 +92,8 @@ async function tick(): Promise<void> {
 describe('maybeSummarize 触发判定', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    stubs.pendingSummaries.mockReturnValue(BATCH);
+    stubs.pendingSummaries.mockReturnValue(LATEST);
+    stubs.recentMentions.mockReturnValue(RECENT);
     stubs.runProfileSummarization.mockResolvedValue(DOCUMENT);
   });
 
@@ -93,7 +107,8 @@ describe('maybeSummarize 触发判定', () => {
     await vi.waitFor(() => expect(stubs.runProfileSummarization).toHaveBeenCalledTimes(1));
     expect(stubs.runProfileSummarization).toHaveBeenCalledWith({
       previous: DOCUMENT,
-      batch: BATCH,
+      latest: LATEST,
+      recent: RECENT,
     });
     await vi.waitFor(() => expect(stubs.saveProfileWithStamp).toHaveBeenCalledTimes(1));
     expect(stubs.saveProfileWithStamp).toHaveBeenCalledWith({
@@ -133,7 +148,11 @@ describe('maybeSummarize 触发判定', () => {
     runner.maybeSummarize();
 
     await vi.waitFor(() => expect(stubs.runProfileSummarization).toHaveBeenCalledTimes(1));
-    expect(stubs.runProfileSummarization).toHaveBeenCalledWith({ previous: null, batch: BATCH });
+    expect(stubs.runProfileSummarization).toHaveBeenCalledWith({
+      previous: null,
+      latest: LATEST,
+      recent: RECENT,
+    });
   });
 
   it('running 中（先悬挂的 summarizeNow 制造）再调 maybeSummarize：不触发第二次（单飞）', async () => {
@@ -181,7 +200,8 @@ describe('maybeSummarize 触发判定', () => {
 describe('summarizeNow 手动入口（AC-2/AC-6）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    stubs.pendingSummaries.mockReturnValue(BATCH);
+    stubs.pendingSummaries.mockReturnValue(LATEST);
+    stubs.recentMentions.mockReturnValue(RECENT);
     stubs.runProfileSummarization.mockResolvedValue(DOCUMENT);
   });
 
@@ -192,7 +212,8 @@ describe('summarizeNow 手动入口（AC-2/AC-6）', () => {
 
     expect(stubs.runProfileSummarization).toHaveBeenCalledWith({
       previous: null,
-      batch: BATCH,
+      latest: LATEST,
+      recent: RECENT,
     });
     expect(stubs.saveProfileWithStamp).toHaveBeenCalledWith({
       document: DOCUMENT,
@@ -263,7 +284,8 @@ describe('summarizeNow 手动入口（AC-2/AC-6）', () => {
 describe('startProfileTimer（AC-2）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    stubs.pendingSummaries.mockReturnValue(BATCH);
+    stubs.pendingSummaries.mockReturnValue(LATEST);
+    stubs.recentMentions.mockReturnValue(RECENT);
     stubs.runProfileSummarization.mockResolvedValue(DOCUMENT);
   });
 

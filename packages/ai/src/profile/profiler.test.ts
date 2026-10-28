@@ -45,32 +45,62 @@ describe('PROFILER_SYSTEM_PROMPT（design 3.2 要点）', () => {
     vi.restoreAllMocks();
   });
 
-  it('含全量重写指令：全新画像、淘汰或改写', async () => {
+  it('含全量重写指令：新的 ProfileDocument、改写或淘汰', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
-    expect(PROFILER_SYSTEM_PROMPT).toContain('全新画像');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('淘汰或改写');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('新的 ProfileDocument');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('改写或淘汰');
   });
 
-  it('含槽位约束：不允许发明新槽位、空数组、严格 JSON', async () => {
+  it('含输出约束：恰好 6 键、可给 [] 或省略键、严格 JSON', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
-    expect(PROFILER_SYSTEM_PROMPT).toContain('不允许发明新槽位');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('空数组');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('恰好这 6 键');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('[] 或省略键');
     expect(PROFILER_SYSTEM_PROMPT).toContain('严格 JSON');
+  });
+
+  it('含三部分输入与 recent 历史时间线指引关键词', async () => {
+    const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
+
+    expect(PROFILER_SYSTEM_PROMPT).toContain('高优先级');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('本批新摘要');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('summary');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('时间倒序');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('至多 100 条');
+    // 旧表述全部移除：analyzed 标志、仅元数据、活跃度判断、batch 旧名
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('analyzed');
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('仅元数据');
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('活跃度');
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('batch');
   });
 
   it('逐条定义 5+1 槽位语义且 key 与 ProfileDocument 一致', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
     for (const slot of ['identity', 'recent', 'interests', 'values', 'goals', 'misc']) {
-      expect(PROFILER_SYSTEM_PROMPT).toContain(slot);
+      expect(PROFILER_SYSTEM_PROMPT).toContain(`${slot}: string[]`);
     }
     // 槽位语义关键词（design 3.2 表）：身份事实 / 近期关注 / 兴趣 / 价值观 / 长期目标
     expect(PROFILER_SYSTEM_PROMPT).toContain('职业');
     expect(PROFILER_SYSTEM_PROMPT).toContain('反复提及');
     expect(PROFILER_SYSTEM_PROMPT).toContain('价值观');
     expect(PROFILER_SYSTEM_PROMPT).toContain('长期目标');
+  });
+
+  it('含输入 interface 结构说明：字段类型与可空性', async () => {
+    const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
+
+    expect(PROFILER_SYSTEM_PROMPT).toContain('interface Input');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('previous: ProfileDocument');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('latest: ListItem[]');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('recent: ListItem[]');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('createdAt: string');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('grade: string | null');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('tags: string[]');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('summary: string');
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('recordId');
+    expect(PROFILER_SYSTEM_PROMPT).not.toContain('勿写入画像');
   });
 });
 
@@ -95,10 +125,10 @@ describe('profileOutputSchema（zod .strict()）', () => {
     ).toEqual({ identity: [], recent: [], interests: [], values: [], goals: [], misc: [] });
   });
 
-  it('缺 misc 槽位对象抛错（缺槽=失败）', async () => {
+  it('缺槽位对象不再抛错：归一化为空数组（缺槽视同无内容）', async () => {
     const { profileOutputSchema } = await loadProfiler();
 
-    expect(() =>
+    expect(
       profileOutputSchema.parse({
         identity: [],
         recent: [],
@@ -106,7 +136,29 @@ describe('profileOutputSchema（zod .strict()）', () => {
         values: [],
         goals: [],
       }),
-    ).toThrow();
+    ).toEqual({ identity: [], recent: [], interests: [], values: [], goals: [], misc: [] });
+  });
+
+  it('槽位为 null 归一化为空数组', async () => {
+    const { profileOutputSchema } = await loadProfiler();
+
+    expect(
+      profileOutputSchema.parse({
+        identity: ['程序员'],
+        recent: null,
+        interests: [],
+        values: [],
+        goals: [],
+        misc: null,
+      }),
+    ).toEqual({
+      identity: ['程序员'],
+      recent: [],
+      interests: [],
+      values: [],
+      goals: [],
+      misc: [],
+    });
   });
 
   it('多 extra 槽位对象抛错（strict：多余槽位即解析失败）', async () => {
@@ -189,7 +241,7 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
     misc: [],
   };
 
-  const batch = [
+  const latest = [
     {
       recordId: 1,
       summary: '最近在调研备忘录应用的 AI 摘要方案',
@@ -203,6 +255,26 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
       grade: null,
       tags: [],
       createdAt: '2026-10-21T09:00:00.000Z',
+    },
+  ];
+
+  /** 近期记录概览输入（dao 已倒序，含摘要全文），按传入顺序原样输出 */
+  const recent: import('../dao/profileDao').RecentMention[] = [
+    {
+      recordId: 13,
+      createdAt: '2026-10-21T09:00:00.000Z',
+      grade: null,
+      tags: [],
+      summary: '周末去了趟植物园',
+      analyzed: false,
+    },
+    {
+      recordId: 12,
+      createdAt: '2026-10-20T10:00:00.000Z',
+      grade: 'high',
+      tags: ['工作', 'AI'],
+      summary: '最近在调研备忘录应用的 AI 摘要方案',
+      analyzed: true,
     },
   ];
 
@@ -230,39 +302,70 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
     generateMock.mockResolvedValue({ object: document });
     const { runProfileSummarization } = await loadProfiler();
 
-    const result = await runProfileSummarization({ previous, batch });
+    const result = await runProfileSummarization({ previous, latest, recent });
 
     expect(result).toEqual(document);
   });
 
-  it('generate 返回缺槽对象时 reject（schema 校验失败自然抛错，不 catch）', async () => {
+  it('generate 返回缺槽对象时 resolve：缺槽归一化为空数组（不再视同失败）', async () => {
     generateMock.mockResolvedValue({
       object: { identity: [], recent: [], interests: [], values: [], goals: [] },
     });
     const { runProfileSummarization } = await loadProfiler();
 
-    await expect(runProfileSummarization({ previous, batch })).rejects.toThrow();
+    await expect(runProfileSummarization({ previous, latest, recent })).resolves.toEqual({
+      identity: [],
+      recent: [],
+      interests: [],
+      values: [],
+      goals: [],
+      misc: [],
+    });
   });
 
-  it('user content 含旧画像 JSON、尚无画像注明与 #编号 列表格式', async () => {
+  it('user content 为 JSON：recent 按传入顺序原样输出（剔除 recordId / analyzed）', async () => {
     generateMock.mockResolvedValue({ object: previous });
     const { runProfileSummarization } = await loadProfiler();
 
-    await runProfileSummarization({ previous, batch });
+    await runProfileSummarization({ previous, latest, recent });
 
     expect(generateMock).toHaveBeenCalledTimes(1);
-    const userContent = generateMock.mock.calls[0][0] as string;
-    expect(userContent).toContain(JSON.stringify(previous));
-    expect(userContent).toContain('#1 [2026-10-20T10:00:00.000Z] (grade: high) 标签：工作、AI');
-    expect(userContent).toContain('#2 [2026-10-21T09:00:00.000Z] (grade: none) 标签：');
-    expect(userContent).toContain('最近在调研备忘录应用的 AI 摘要方案');
+    const payload = JSON.parse(generateMock.mock.calls[0][0] as string);
+    expect(payload.recent).toEqual([
+      {
+        createdAt: '2026-10-21T09:00:00.000Z',
+        grade: null,
+        tags: [],
+        summary: '周末去了趟植物园',
+      },
+      {
+        createdAt: '2026-10-20T10:00:00.000Z',
+        grade: 'high',
+        tags: ['工作', 'AI'],
+        summary: '最近在调研备忘录应用的 AI 摘要方案',
+      },
+    ]);
+  });
+
+  it('user content 为 JSON：previous 为旧画像对象，latest/recent 元素无 recordId；无旧画像时为 {}（不再注入「尚无画像」）', async () => {
+    generateMock.mockResolvedValue({ object: previous });
+    const { runProfileSummarization } = await loadProfiler();
+
+    await runProfileSummarization({ previous, latest, recent });
+
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(generateMock.mock.calls[0][0] as string);
+    expect(payload.previous).toEqual(previous);
+    for (const item of payload.latest) {
+      expect(item).not.toHaveProperty('recordId');
+    }
 
     generateMock.mockClear();
-    await runProfileSummarization({ previous: null, batch });
+    await runProfileSummarization({ previous: null, latest, recent });
 
-    const nullContent = generateMock.mock.calls[0][0] as string;
-    expect(nullContent).toContain('尚无画像');
-    expect(nullContent).not.toContain(JSON.stringify(previous));
+    const nullPayload = JSON.parse(generateMock.mock.calls[0][0] as string);
+    expect(nullPayload.previous).toEqual({});
+    expect(generateMock.mock.calls[0][0]).not.toContain('尚无画像');
   });
 
   it('KIMI_API_KEY 未配置时 reject，error 含配置指引', async () => {
@@ -270,7 +373,7 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
     generateMock.mockResolvedValue({ object: previous });
     const { runProfileSummarization } = await loadProfiler();
 
-    await expect(runProfileSummarization({ previous, batch })).rejects.toThrow(
+    await expect(runProfileSummarization({ previous, latest, recent })).rejects.toThrow(
       '请设置 KIMI_API_KEY 环境变量',
     );
     expect(generateMock).not.toHaveBeenCalled();
@@ -281,7 +384,7 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const { runProfileSummarization, profileOutputSchema } = await loadProfiler();
 
-    await runProfileSummarization({ previous, batch });
+    await runProfileSummarization({ previous, latest, recent });
 
     expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     const options = generateMock.mock.calls[0][1] as {

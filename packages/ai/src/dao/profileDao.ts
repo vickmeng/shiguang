@@ -14,6 +14,13 @@ import type { ProfileDocument } from '@shiguang/shared';
  * 待汇总队列读取（pendingSummaries / pendingCount）：profiled_at IS NULL，
  * FIFO 按 records.created_at ASC, analyses.record_id ASC 双键排序。
  */
+/** 近期记录概览：普通记录覆盖近 30 天窗口 */
+const RECENT_BASE_WINDOW_DAYS = 30;
+/** 近期记录概览：grade = 'high' 记录放宽到近 90 天窗口 */
+const RECENT_HIGH_WINDOW_DAYS = 90;
+/** 近期记录概览：返回条数上限 */
+const RECENT_LIMIT = 100;
+
 let db: Database.Database | null = null;
 
 /** 注入 DAO 使用的数据库连接（通常在主进程启动初始化时调用一次）。 */
@@ -43,6 +50,26 @@ interface PendingSummaryRow {
   grade: string | null;
   tags: string | null;
   created_at: string;
+}
+
+/** 近期记录概览条目（含摘要全文，供 profiler 历史时间线参考），profileDao 导出共享 */
+export interface RecentMention {
+  recordId: number;
+  createdAt: string;
+  grade: string | null;
+  tags: string[];
+  summary: string;
+  analyzed: boolean;
+}
+
+/** analyses JOIN records 后的近期概览行结构 */
+interface RecentMentionRow {
+  record_id: number;
+  created_at: string;
+  grade: string | null;
+  tags: string | null;
+  summary: string;
+  analyzed: number;
 }
 
 /**
@@ -162,6 +189,56 @@ export function pendingSummaries(): PendingSummary[] {
     grade: row.grade,
     tags: parseTags(row.tags),
     createdAt: row.created_at,
+  }));
+}
+
+/**
+ * 读取近期记录概览（含每条摘要全文）。
+ *
+ * 窗口语义：普通记录覆盖近 RECENT_BASE_WINDOW_DAYS 天；grade = 'high' 的
+ * 记录放宽到近 RECENT_HIGH_WINDOW_DAYS 天（两条 OR 条件取并集）。窗口起点
+ * 为当前 ISO 时间往前推对应天数，created_at 存 ISO 字符串，直接字符串比较。
+ * 按 records.created_at DESC 倒序（最新在前），至多 RECENT_LIMIT 条。
+ *
+ * summary 为 analyses.summary 摘要全文（与 batch 同构）；analyzed =
+ * (analyses.profiled_at IS NOT NULL)：该条摘要曾作为输入参与某次汇总，
+ * 保留供调用方筛选，不渲染进喂模型的文本。tags 经私有 parseTags 解析
+ * （坏 JSON 降级空数组）。
+ *
+ * @returns 近期概览列表（按时间倒序，至多 100 条）
+ */
+export function recentMentions(): RecentMention[] {
+  if (!db) {
+    throw new Error('profileDao: database not initialized: call setProfileDatabase first');
+  }
+
+  const now = Date.now();
+  const baseWindowStart = new Date(
+    now - RECENT_BASE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const highWindowStart = new Date(
+    now - RECENT_HIGH_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+
+  const rows = db
+    .prepare(
+      `SELECT analyses.record_id, records.created_at, analyses.grade, records.tags,
+              analyses.summary, (analyses.profiled_at IS NOT NULL) AS analyzed
+       FROM analyses
+       JOIN records ON records.id = analyses.record_id
+       WHERE records.created_at >= ? OR (analyses.grade = 'high' AND records.created_at >= ?)
+       ORDER BY records.created_at DESC
+       LIMIT ?`,
+    )
+    .all(baseWindowStart, highWindowStart, RECENT_LIMIT) as unknown as RecentMentionRow[];
+
+  return rows.map((row) => ({
+    recordId: row.record_id,
+    createdAt: row.created_at,
+    grade: row.grade,
+    tags: parseTags(row.tags),
+    summary: row.summary,
+    analyzed: row.analyzed === 1,
   }));
 }
 

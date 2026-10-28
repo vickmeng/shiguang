@@ -16,6 +16,7 @@ import {
   getProfile,
   pendingCount,
   pendingSummaries,
+  recentMentions,
   runProfileSummarization,
   saveProfileWithStamp,
 } from '@shiguang/ai';
@@ -93,10 +94,11 @@ export function summarizeNow(): Promise<ProfileSummarizeResult> {
  * 单事务写画像并批量打时间戳（画像与打戳同生共死）。
  */
 async function doSummarize(): Promise<ProfileSummarizeResult> {
-  const batch = pendingSummaries();
+  const latest = pendingSummaries();
+  const recent = recentMentions();
   const previous: ProfileDocument | null = getProfile()?.document ?? null;
-    const document = await runProfileSummarization({ previous, batch });
-  saveProfileWithStamp({ document, stampedIds: batch.map((s) => s.recordId) });
+    const document = await runProfileSummarization({ previous, latest, recent });
+  saveProfileWithStamp({ document, stampedIds: latest.map((s) => s.recordId) });
   return { ok: true };
 }
 

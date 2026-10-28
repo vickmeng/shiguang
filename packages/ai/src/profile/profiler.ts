@@ -1,81 +1,88 @@
 /**
  * profiler.ts — 画像汇总 Agent：把「上一版画像 + 本批待汇总摘要」全量重写为
- * 一份全新用户画像（固定 5+1 槽位，对应 shared ProfileDocument 契约）。
+ * 一份全新用户画像（固定 6 槽位，对应 shared ProfileDocument 契约）。
  *
  * 复用 summarizer 已验证的模型接入模式（Mastra 原生 custom endpoint 配置接 Kimi
  * OpenAI 兼容端点，resolveKimiModel 复用 import，model 函数惰性求值）；
- * zod .strict() schema 把「AI 发明新槽位」与「漏槽」统一收敛为解析抛错
- * （视同汇总失败，由调用方 summarizeNow 走失败路径：旧画像保留、队列不动）。
+ * zod .strict() schema 把「AI 发明新槽位」收敛为解析抛错，缺槽/null 则归一化为
+ * 空数组（视同该槽位无内容，不视为失败）。
  * runProfileSummarization（输入拼装 + generate 调用）在本文件下半部分实现。
  */
 import { Agent } from '@mastra/core/agent';
 import { z } from 'zod';
 import type { ProfileDocument } from '@shiguang/shared';
 import { resolveKimiModel } from '../analysis/summarizer';
-import type { PendingSummary } from '../dao/profileDao';
+import type { PendingSummary, RecentMention } from '../dao/profileDao';
 
-/** 本批喂入汇总的待汇总摘要，定义统一于 profileDao，此处透传复用。 */
-export type { PendingSummary };
+/** 本批喂入汇总的待汇总摘要与近期记录概览，定义统一于 profileDao，此处透传复用。 */
+export type { PendingSummary, RecentMention };
 
 /**
  * PROFILER_SYSTEM_PROMPT —— 画像全量重写的系统提示（design 3.2 要点逐条落 prompt）。
  *
  * 设计取向：与 summarizer 同款极简、无品牌语境——LLM 不需要知道「拾光」是什么，
- * 只需知道输入构成（旧画像 + 本批摘要均为参考输入）与输出契约（6 槽位严格 JSON）。
+ * 只需知道输入构成（旧画像 + 本批摘要 + 近期概览均为参考输入）与输出契约（6 槽位严格 JSON）。
  */
-export const PROFILER_SYSTEM_PROMPT = `你将收到两部分输入：
-1. 上一版用户画像（JSON 对象，可能注明尚无画像）；
-2. 一批新的记录摘要（每条含编号、记录时间、分级与标签）。
+export const PROFILER_SYSTEM_PROMPT = `ProfileDocument = 用户画像文档，恰好 6 个槽位（key 固定，均为字符串数组）：
+interface ProfileDocument {
+  identity: string[];    // 稳定身份事实（职业、角色、生活状态）
+  recent: string[];      // 近期反复提及、正在关心的话题（时效性强）
+  interests: string[];   // 稳定的兴趣领域
+  values: string[];      // 价值观——看重/抵触/做事偏好
+  goals: string[];       // 长期目标与方向
+  misc: string[];        // 不属于以上槽位但值得记住的事实
+}
 
-任务：输出一份全新画像，完整描述这位用户是谁、最近在关心什么、长期要什么。
-旧画像与新摘要都只是参考输入，不是可以照抄的答案：
-- 久未提及的、用户习惯已变化的内容要淘汰或改写，不要原样保留陈旧表述；
-- 新摘要中反复出现的信息可以吸收进对应槽位；
-- 同义或重叠的条目合并为一条最准确的表述。
+输入为一个 JSON 对象：
+interface Input {
+  previous: ProfileDocument;  // 上一版画像；无旧画像时为 {}
+  latest: ListItem[];         // 本批新摘要：最新最具体，高优先级
+  recent: ListItem[];         // 历史概览：按时间倒序、至多 100 条；与 latest 重叠的记录以 latest 为准
+}
+interface ListItem {
+  createdAt: string;      // 记录时间
+  grade: string | null;   // 重要性分级，null 表示无分级
+  tags: string[];         // 标签，可为空数组
+  summary: string;        // 该条 AI 摘要全文
+}
 
-槽位定义（固定 5+1 个，输出对象的 key 必须严格如下）：
-- identity：用户是谁——职业、角色、生活状态等稳定的身份事实；
-- recent：近期反复提及、正在关心的话题（时效性强，久不提及即应淘汰）；
-- interests：稳定的兴趣领域；
-- values：价值观——看重的东西、抵触的东西、做事偏好；
-- goals：长期目标与方向；
-- misc：不属于以上任何槽位、但值得记住的事实。
+任务：全量重写为一份新的 ProfileDocument（用户是谁、最近在关心什么）。输入均为参考而非照抄：新旧冲突以 latest 为准，被覆盖的旧表述应改写或淘汰，重叠条目合并为一条最准表述；分级高的记录证据权重更高；输入的 recent 为历史时间线参考，但 latest 更新、更具体，优先级更高。
 
-条目约束：
-- 每条一句话以内，纯事实短句，不编造输入中没有的信息；
-- 不写解释、不标注来源编号、不输出条目以外的任何文字。
+原则：宁缺毋滥，空槽位是正常结果。每槽位须充分证据才填；稳定槽位（identity/interests/values/goals）需直接明确证据、最好多条摘要互证，勿从单条过度推断；recent 槽位只收明确在关心的近期话题；latest 仅 1–2 条时大部分槽位为空属预期。
 
-槽位约束：
-- 槽位集合固定，不允许发明新槽位，也不允许改槽位名；
-- 某槽位确实无内容时输出空数组，不要省略该槽位。
-
-严格 JSON 输出，恰好含且只含以下六个键；某槽位无内容时给 [] 而不是省略键。
-以下为结构示例（内容仅为占位，严禁照抄，条目必须来自输入）：
-{
-  "identity": ["职业或角色", "家庭状态"],
-  "recent": ["近期话题一", "近期话题二"],
-  "interests": ["稳定兴趣"],
-  "values": ["看重什么"],
-  "goals": ["长期方向"],
-  "misc": []
-}`;
+输出：只输出一个 ProfileDocument 的严格 JSON（恰好这 6 键，不允许发明新槽位或改键名；无内容给 [] 或省略键），不要输出任何其他文字。`;
 
 /**
  * structured output 校验 schema。
- * strict：多余槽位即解析失败；6 槽位全必需，缺槽=失败（design 3.3 骨架 2 / AC-4）。
+ * 入口放宽、出口归一：某槽位缺键或为 null 一律归一化为空数组（视同无内容，
+ * 不视为失败）；.strict() 保留——发明新槽位仍判解析失败。
  * 元素为字符串；条目一句话以内由 prompt 约束，不做长度硬校验。
- * 注解 z.ZodType<ProfileDocument>：编译期把 schema 输出契约锁到 shared 画像契约。
+ * 注解 z.ZodType<ProfileDocument, unknown>：编译期把 schema 输出契约
+ * 锁到 shared 画像契约（输入侧放宽为 unknown，输出侧为规范 6 键 ProfileDocument）。
  */
-export const profileOutputSchema: z.ZodType<ProfileDocument> = z
+const slotSchema = z.preprocess(
+  (v) => (v === undefined || v === null ? [] : v),
+  z.array(z.string()),
+);
+
+export const profileOutputSchema: z.ZodType<ProfileDocument, unknown> = z
   .object({
-    identity: z.array(z.string()),
-    recent: z.array(z.string()),
-    interests: z.array(z.string()),
-    values: z.array(z.string()),
-    goals: z.array(z.string()),
-    misc: z.array(z.string()),
+    identity: slotSchema.optional(),
+    recent: slotSchema.optional(),
+    interests: slotSchema.optional(),
+    values: slotSchema.optional(),
+    goals: slotSchema.optional(),
+    misc: slotSchema.optional(),
   })
-  .strict();
+  .strict()
+  .transform((o) => ({
+    identity: o.identity ?? [],
+    recent: o.recent ?? [],
+    interests: o.interests ?? [],
+    values: o.values ?? [],
+    goals: o.goals ?? [],
+    misc: o.misc ?? [],
+  }));
 
 /**
  * 画像汇总 Agent（复用 summarizer 的 custom endpoint 模式：{ id, url, apiKey }，
@@ -96,20 +103,24 @@ const profilerAgent = new Agent({
 });
 
 /**
- * 汇总一版全新用户画像：上一版画像 + 本批待汇总摘要 → ProfileDocument。
+ * 汇总一版全新用户画像：上一版画像 + 本批待汇总摘要 + 近期记录概览 → ProfileDocument。
  *
- * user content 两段拼装：旧画像 JSON（null 时注明「尚无画像」）+ 本批摘要
- * 编号列表（`#recordId [createdAt] (grade: x) 标签：…\n摘要`，grade 缺失为 none）。
- * structuredOutput 经 zod strict schema 校验，缺/多槽位与超时一样自然抛错
- * （不 catch，由调用方 summarizeNow 走失败路径：旧画像保留、队列不动）。
+ * user content 为单个 JSON 字符串：{ previous, latest, recent } 三键。
+ * previous 为旧画像对象（无旧画像时为 {}，不再注入「尚无画像」字样）；
+ * latest 为待汇总摘要（FIFO）；recent 为近期概览（dao 已倒序）；两者序列化时
+ * 均剔除 recordId / analyzed（仅 dao 层使用，不喂模型），其余字段原样保留。
+ * structuredOutput 经 zod schema 校验：缺槽/null 归一化为空数组，发明新槽位
+ * 与超时一样自然抛错（不 catch，由调用方 summarizeNow 走失败路径：旧画像保留、队列不动）。
  *
- * @param input previous 为当前画像（无则 null）；batch 为待汇总摘要（FIFO）
+ * @param input previous 为当前画像（无则 null）；latest 为待汇总摘要（FIFO）；
+ *   recent 为近期记录概览（dao 已按时间倒序）
  * @returns 解析通过的全新画像文档
  * @throws 未配置 KIMI_API_KEY（配置指引）/ 超时 / schema 校验失败
  */
 export async function runProfileSummarization(input: {
   previous: ProfileDocument | null;
-  batch: PendingSummary[];
+  latest: PendingSummary[];
+  recent: RecentMention[];
 }): Promise<ProfileDocument> {
   if (!process.env.KIMI_API_KEY) {
     throw new Error(
@@ -117,14 +128,18 @@ export async function runProfileSummarization(input: {
     );
   }
 
-  const previousSection = input.previous ? JSON.stringify(input.previous) : '尚无画像';
-  const batchSection = input.batch
-    .map(
-      (s) =>
-        `#${s.recordId} [${s.createdAt}] (grade: ${s.grade ?? 'none'}) 标签：${s.tags.join('、')}\n${s.summary}`,
-    )
-    .join('\n\n');
-  const userContent = `上一版用户画像：\n${previousSection}\n\n本批新的记录摘要：\n${batchSection}`;
+  // 剔除 recordId / analyzed：仅 dao 层使用，不喂模型
+  const pickFields = ({ createdAt, grade, tags, summary }: PendingSummary) => ({
+    createdAt,
+    grade,
+    tags,
+    summary,
+  });
+  const userContent = JSON.stringify({
+    previous: input.previous ?? {},
+    latest: input.latest.map(pickFields),
+    recent: input.recent.map(pickFields),
+  });
 
   const result = await profilerAgent.generate(userContent, {
     structuredOutput: { schema: profileOutputSchema },

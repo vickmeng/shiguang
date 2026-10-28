@@ -31,7 +31,8 @@ export {
   saveProfileWithStamp,
   pendingSummaries,
   pendingCount,
+  recentMentions,
 } from './dao/profileDao';
-export type { PendingSummary } from './dao/profileDao';
+export type { PendingSummary, RecentMention } from './dao/profileDao';
 export { runProfileSummarization } from './profile/profiler';
 export type { CaptureRecord } from '@shiguang/shared';
