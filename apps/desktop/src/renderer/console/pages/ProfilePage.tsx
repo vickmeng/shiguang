@@ -9,8 +9,8 @@
  * reject）时 toast 展示 error，可再次点击重试；
  * 内容区：document 为 null → 空态（引导文案「汇总 5 条以上记录摘要后
  * 自动生成画像」+「立即汇总」主按钮）；非 null → 按 SLOT_LABELS 固定顺序
- * 渲染 6 槽位分区（分区标题 + 条目 <ul>/<li> 列表），条目数组为空的分区
- * 不渲染（design 3.3 骨架第 8 条空槽隐藏）；整页只读，无任何编辑入口。
+ * 渲染 6 槽位分区（分区标题 + 描述文字段落），槽位为空（null/undefined/空串）
+ * 的分区不渲染（design 3.3 骨架第 8 条空槽隐藏）；整页只读，无任何编辑入口。
  */
 import * as React from 'react';
 import type { ProfileDocument, ProfileStatusPayload } from '@shiguang/shared';
@@ -98,18 +98,12 @@ export function ProfilePage(): JSX.Element {
       ) : (
         /* 6 槽位分区（顺序固定），空槽位不渲染 */
         SLOT_LABELS.map(({ key, label }) => {
-          const items = document_[key];
-          if (items.length === 0) return null;
+          const value = document_[key];
+          if (!value) return null;
           return (
             <section key={key} className="rounded-md border border-neutral-200 bg-white px-4 py-3">
               <h2 className="text-sm font-medium text-neutral-600">{label}</h2>
-              <ul className="mt-2 flex flex-col gap-1">
-                {items.map((item, index) => (
-                  <li key={index} className="text-sm text-neutral-700">
-                    {item}
-                  </li>
-                ))}
-              </ul>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-neutral-700">{value}</p>
             </section>
           );
         })

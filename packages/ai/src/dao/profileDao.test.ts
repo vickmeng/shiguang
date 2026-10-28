@@ -80,12 +80,12 @@ describe('profileDao', () => {
 
   it('saveProfileWithStamp 后 getProfile 读回 document 深相等与 updated_at', () => {
     const document: ProfileDocument = {
-      identity: ['程序员'],
-      recent: ['在学 Rust'],
-      interests: ['徒步'],
-      values: ['看重家庭'],
-      goals: ['成为独立开发者'],
-      misc: ['养了一只猫'],
+      identity: '程序员，近期在学 Rust',
+      recent: null,
+      interests: '徒步',
+      values: '看重家庭',
+      goals: '成为独立开发者',
+      misc: '养了一只猫',
     };
 
     saveProfileWithStamp({ document, stampedIds: [] });
@@ -100,20 +100,20 @@ describe('profileDao', () => {
 
   it('重复 save 为 UPSERT：profiles 仅一行且 document 被覆盖', () => {
     const first: ProfileDocument = {
-      identity: ['第一版'],
-      recent: [],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: '第一版',
+      recent: null,
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
     };
     const second: ProfileDocument = {
-      identity: ['第二版'],
-      recent: ['新话题'],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: '第二版',
+      recent: '新话题',
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
     };
 
     saveProfileWithStamp({ document: first, stampedIds: [] });
@@ -134,12 +134,12 @@ describe('profileDao', () => {
     const orphanId = hitId + missId + 999;
 
     const document: ProfileDocument = {
-      identity: [],
-      recent: [],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: null,
+      recent: null,
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
     };
     saveProfileWithStamp({ document, stampedIds: [hitId, orphanId] });
 
@@ -167,7 +167,7 @@ describe('profileDao', () => {
     const id = seedRecord(db, { text: '不带戳' });
 
     saveProfileWithStamp({
-      document: { identity: [], recent: [], interests: [], values: [], goals: [], misc: [] },
+      document: { identity: null, recent: null, interests: null, values: null, goals: null, misc: null },
       stampedIds: [],
     });
 
@@ -262,7 +262,7 @@ describe('profileDao 待汇总队列', () => {
     expect(pendingCount()).toBe(2);
 
     saveProfileWithStamp({
-      document: { identity: [], recent: [], interests: [], values: [], goals: [], misc: [] },
+      document: { identity: null, recent: null, interests: null, values: null, goals: null, misc: null },
       stampedIds: pendingSummaries().map((s) => s.recordId),
     });
 
@@ -382,7 +382,7 @@ describe('profileDao 未初始化', () => {
     expect(() => fresh.pendingCount()).toThrow(/profileDao: database not initialized/);
     expect(() =>
       fresh.saveProfileWithStamp({
-        document: { identity: [], recent: [], interests: [], values: [], goals: [], misc: [] },
+        document: { identity: null, recent: null, interests: null, values: null, goals: null, misc: null },
         stampedIds: [],
       }),
     ).toThrow(/profileDao: database not initialized/);

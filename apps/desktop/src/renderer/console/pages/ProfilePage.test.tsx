@@ -24,12 +24,12 @@ function createApiMock(initial: ProfileStatusPayload) {
 }
 
 const FULL_DOC: ProfileDocument = {
-  identity: ['远程工作者'],
-  recent: ['在搭拾光项目'],
-  interests: ['摄影', '徒步'],
-  values: ['重视家人陪伴'],
-  goals: ['明年完成一次长途徒步'],
-  misc: ['养了一只猫'],
+  identity: '远程工作者',
+  recent: '在搭拾光项目',
+  interests: '摄影与徒步',
+  values: '重视家人陪伴',
+  goals: '明年完成一次长途徒步',
+  misc: '养了一只猫',
 };
 
 const EMPTY_STATUS: ProfileStatusPayload = {
@@ -92,7 +92,7 @@ describe('ProfilePage 画像页', () => {
   it('空槽位分区不渲染，非空槽位正常渲染', async () => {
     const sparse: ProfileStatusPayload = {
       ...FULL_STATUS,
-      document: { identity: ['远程工作者'], recent: [], interests: [], values: [], goals: [], misc: ['养了一只猫'] },
+      document: { identity: '远程工作者', recent: null, interests: null, values: null, goals: null, misc: '养了一只猫' },
     };
     const { api } = createApiMock(sparse);
     window.api = api;
@@ -129,14 +129,14 @@ describe('ProfilePage 画像页', () => {
 
     // 汇总完成：状态推进（模拟主进程已写新画像），resolve 后页面重新 get 刷新
     setStatus({
-      document: { ...FULL_DOC, misc: ['养了一只猫', '新条目'] },
+      document: { ...FULL_DOC, misc: '养了一只猫，新条目' },
       updatedAt: '2026-10-27T09:00:00.000Z',
       pendingCount: 0,
       running: false,
     });
     resolveSummarize({ ok: true });
 
-    expect(await screen.findByText('新条目')).toBeTruthy();
+    expect(await screen.findByText('养了一只猫，新条目')).toBeTruthy();
     expect(inner.get).toHaveBeenCalledTimes(2);
     expect(button).toHaveProperty('disabled', false);
   });

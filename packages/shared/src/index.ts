@@ -152,15 +152,16 @@ export interface SetLastTagsPayload {
 export const AI_NOT_MEANINGFUL_MESSAGE = '内容未拾光：AI 判定无有效信息';
 
 /**
- * AI 用户画像：固定 6 槽位；key 英文，中文展示文案由前端映射：身份概况/最近关注/兴趣爱好/在意的事/长期方向/其他
+ * AI 用户画像：固定 6 槽位，每槽位为一段描述性文字（string），缺键/null/空串
+ * 表示该槽位无内容；key 英文，中文展示文案由前端映射：身份概况/最近关注/兴趣爱好/在意的事/长期方向/其他
  */
 export interface ProfileDocument {
-  identity: string[];
-  recent: string[];
-  interests: string[];
-  values: string[];
-  goals: string[];
-  misc: string[];
+  identity?: string | null;
+  recent?: string | null;
+  interests?: string | null;
+  values?: string | null;
+  goals?: string | null;
+  misc?: string | null;
 }
 
 /** profile:get 响应 */

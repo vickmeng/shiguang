@@ -47,12 +47,12 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const DOCUMENT: ProfileDocument = {
-  identity: ['用户是开发者'],
-  recent: [],
-  interests: [],
-  values: [],
-  goals: [],
-  misc: [],
+  identity: '用户是开发者',
+  recent: null,
+  interests: null,
+  values: null,
+  goals: null,
+  misc: null,
 };
 
 const LATEST: PendingSummary[] = [1, 2, 3, 4, 5].map((recordId) => ({

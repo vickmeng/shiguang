@@ -50,12 +50,12 @@ vi.mock('../profile/profileRunner', () => ({
 import { registerProfileHandlers } from './profileHandlers';
 
 const DOCUMENT: ProfileDocument = {
-  identity: ['后端工程师'],
-  recent: ['在重构记录页'],
-  interests: ['钓鱼'],
-  values: ['厌恶重复劳动'],
-  goals: ['做独立产品'],
-  misc: [],
+  identity: '后端工程师',
+  recent: '在重构记录页',
+  interests: '钓鱼',
+  values: '厌恶重复劳动',
+  goals: '做独立产品',
+  misc: null,
 };
 
 /** 取出指定通道的 invoke handler（先注册再捕获）。 */

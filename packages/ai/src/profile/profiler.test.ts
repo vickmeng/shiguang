@@ -45,29 +45,29 @@ describe('PROFILER_SYSTEM_PROMPT（design 3.2 要点）', () => {
     vi.restoreAllMocks();
   });
 
-  it('含全量重写指令：新的 ProfileDocument、改写或淘汰', async () => {
+  it('含全量重写指令：新的 ProfileDocument、严格按格式输出', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
+    expect(PROFILER_SYSTEM_PROMPT).toContain('全量重写');
     expect(PROFILER_SYSTEM_PROMPT).toContain('新的 ProfileDocument');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('改写或淘汰');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('严格按照规定格式输出');
   });
 
-  it('含输出约束：恰好 6 键、可给 [] 或省略键、严格 JSON', async () => {
+  it('含输出约束：严格 JSON、空槽为正常结果', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
-    expect(PROFILER_SYSTEM_PROMPT).toContain('恰好这 6 键');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('[] 或省略键');
     expect(PROFILER_SYSTEM_PROMPT).toContain('严格 JSON');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('宁缺毋滥');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('为空是正常结果');
   });
 
-  it('含三部分输入与 recent 历史时间线指引关键词', async () => {
+  it('含三部分输入结构说明关键词', async () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
-    expect(PROFILER_SYSTEM_PROMPT).toContain('高优先级');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('本批新摘要');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('previous');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('新摘要');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('历史概览');
     expect(PROFILER_SYSTEM_PROMPT).toContain('summary');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('时间倒序');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('至多 100 条');
     // 旧表述全部移除：analyzed 标志、仅元数据、活跃度判断、batch 旧名
     expect(PROFILER_SYSTEM_PROMPT).not.toContain('analyzed');
     expect(PROFILER_SYSTEM_PROMPT).not.toContain('仅元数据');
@@ -79,7 +79,7 @@ describe('PROFILER_SYSTEM_PROMPT（design 3.2 要点）', () => {
     const { PROFILER_SYSTEM_PROMPT } = await loadProfiler();
 
     for (const slot of ['identity', 'recent', 'interests', 'values', 'goals', 'misc']) {
-      expect(PROFILER_SYSTEM_PROMPT).toContain(`${slot}: string[]`);
+      expect(PROFILER_SYSTEM_PROMPT).toContain(`${slot}?: string | null`);
     }
     // 槽位语义关键词（design 3.2 表）：身份事实 / 近期关注 / 兴趣 / 价值观 / 长期目标
     expect(PROFILER_SYSTEM_PROMPT).toContain('职业');
@@ -93,8 +93,8 @@ describe('PROFILER_SYSTEM_PROMPT（design 3.2 要点）', () => {
 
     expect(PROFILER_SYSTEM_PROMPT).toContain('interface Input');
     expect(PROFILER_SYSTEM_PROMPT).toContain('previous: ProfileDocument');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('latest: ListItem[]');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('recent: ListItem[]');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('latest: SummaryItem[]');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('recent: SummaryItem[]');
     expect(PROFILER_SYSTEM_PROMPT).toContain('createdAt: string');
     expect(PROFILER_SYSTEM_PROMPT).toContain('grade: string | null');
     expect(PROFILER_SYSTEM_PROMPT).toContain('tags: string[]');
@@ -110,54 +110,54 @@ describe('profileOutputSchema（zod .strict()）', () => {
     agentConfigs.length = 0;
   });
 
-  it('6 槽位全空数组对象通过', async () => {
+  it('6 槽位全 null 对象通过且原样透传', async () => {
     const { profileOutputSchema } = await loadProfiler();
 
     expect(
       profileOutputSchema.parse({
-        identity: [],
-        recent: [],
-        interests: [],
-        values: [],
-        goals: [],
-        misc: [],
-      }),
-    ).toEqual({ identity: [], recent: [], interests: [], values: [], goals: [], misc: [] });
-  });
-
-  it('缺槽位对象不再抛错：归一化为空数组（缺槽视同无内容）', async () => {
-    const { profileOutputSchema } = await loadProfiler();
-
-    expect(
-      profileOutputSchema.parse({
-        identity: [],
-        recent: [],
-        interests: [],
-        values: [],
-        goals: [],
-      }),
-    ).toEqual({ identity: [], recent: [], interests: [], values: [], goals: [], misc: [] });
-  });
-
-  it('槽位为 null 归一化为空数组', async () => {
-    const { profileOutputSchema } = await loadProfiler();
-
-    expect(
-      profileOutputSchema.parse({
-        identity: ['程序员'],
+        identity: null,
         recent: null,
-        interests: [],
-        values: [],
-        goals: [],
+        interests: null,
+        values: null,
+        goals: null,
+        misc: null,
+      }),
+    ).toEqual({ identity: null, recent: null, interests: null, values: null, goals: null, misc: null });
+  });
+
+  it('缺槽位对象不再抛错：原样透传（缺槽视同无内容）', async () => {
+    const { profileOutputSchema } = await loadProfiler();
+
+    expect(
+      profileOutputSchema.parse({
+        identity: '用户是开发者',
+        recent: null,
+        interests: null,
+        values: null,
+        goals: null,
+      }),
+    ).toEqual({ identity: '用户是开发者', recent: null, interests: null, values: null, goals: null });
+  });
+
+  it('槽位混合 string / null 原样透传', async () => {
+    const { profileOutputSchema } = await loadProfiler();
+
+    expect(
+      profileOutputSchema.parse({
+        identity: '程序员',
+        recent: null,
+        interests: '徒步与摄影',
+        values: null,
+        goals: '成为独立开发者',
         misc: null,
       }),
     ).toEqual({
-      identity: ['程序员'],
-      recent: [],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: '程序员',
+      recent: null,
+      interests: '徒步与摄影',
+      values: null,
+      goals: '成为独立开发者',
+      misc: null,
     });
   });
 
@@ -166,28 +166,38 @@ describe('profileOutputSchema（zod .strict()）', () => {
 
     expect(() =>
       profileOutputSchema.parse({
-        identity: [],
-        recent: [],
-        interests: [],
-        values: [],
-        goals: [],
-        misc: [],
-        extra: [],
+        identity: null,
+        recent: null,
+        interests: null,
+        values: null,
+        goals: null,
+        misc: null,
+        extra: null,
       }),
     ).toThrow();
   });
 
-  it('槽位元素非字符串（如数字）抛错', async () => {
+  it('槽位非字符串（如数字、数组）抛错', async () => {
     const { profileOutputSchema } = await loadProfiler();
 
     expect(() =>
       profileOutputSchema.parse({
-        identity: [42],
-        recent: [],
-        interests: [],
-        values: [],
-        goals: [],
-        misc: [],
+        identity: 42,
+        recent: null,
+        interests: null,
+        values: null,
+        goals: null,
+        misc: null,
+      }),
+    ).toThrow();
+    expect(() =>
+      profileOutputSchema.parse({
+        identity: ['程序员'],
+        recent: null,
+        interests: null,
+        values: null,
+        goals: null,
+        misc: null,
       }),
     ).toThrow();
   });
@@ -233,12 +243,12 @@ describe('profilerAgent 构造（复用 summarizer 模型接入模式）', () =>
 
 describe('runProfileSummarization（输入拼装 + structured output 调用）', () => {
   const previous = {
-    identity: ['程序员'],
-    recent: [],
-    interests: [],
-    values: [],
-    goals: [],
-    misc: [],
+    identity: '程序员',
+    recent: null,
+    interests: null,
+    values: null,
+    goals: null,
+    misc: null,
   };
 
   const latest = [
@@ -292,12 +302,12 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
 
   it('generate 返回 6 槽位对象时 resolve 为 ProfileDocument', async () => {
     const document = {
-      identity: ['程序员'],
-      recent: ['调研 AI 摘要方案'],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: '程序员',
+      recent: '调研 AI 摘要方案',
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
     };
     generateMock.mockResolvedValue({ object: document });
     const { runProfileSummarization } = await loadProfiler();
@@ -307,19 +317,18 @@ describe('runProfileSummarization（输入拼装 + structured output 调用）',
     expect(result).toEqual(document);
   });
 
-  it('generate 返回缺槽对象时 resolve：缺槽归一化为空数组（不再视同失败）', async () => {
+  it('generate 返回缺槽对象时 resolve：缺槽原样透传（不再视同失败）', async () => {
     generateMock.mockResolvedValue({
-      object: { identity: [], recent: [], interests: [], values: [], goals: [] },
+      object: { identity: '程序员', recent: null, interests: null, values: null, goals: null },
     });
     const { runProfileSummarization } = await loadProfiler();
 
     await expect(runProfileSummarization({ previous, latest, recent })).resolves.toEqual({
-      identity: [],
-      recent: [],
-      interests: [],
-      values: [],
-      goals: [],
-      misc: [],
+      identity: '程序员',
+      recent: null,
+      interests: null,
+      values: null,
+      goals: null,
     });
   });
 

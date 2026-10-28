@@ -4,8 +4,8 @@
  *
  * 复用 summarizer 已验证的模型接入模式（Mastra 原生 custom endpoint 配置接 Kimi
  * OpenAI 兼容端点，resolveKimiModel 复用 import，model 函数惰性求值）；
- * zod .strict() schema 把「AI 发明新槽位」收敛为解析抛错，缺槽/null 则归一化为
- * 空数组（视同该槽位无内容，不视为失败）。
+ * zod .strict() schema 把「AI 发明新槽位」收敛为解析抛错，槽位缺键/null 则
+ * 原样透传（string | null，视同该槽位无内容，不视为失败）。
  * runProfileSummarization（输入拼装 + generate 调用）在本文件下半部分实现。
  */
 import { Agent } from '@mastra/core/agent';
@@ -23,66 +23,60 @@ export type { PendingSummary, RecentMention };
  * 设计取向：与 summarizer 同款极简、无品牌语境——LLM 不需要知道「拾光」是什么，
  * 只需知道输入构成（旧画像 + 本批摘要 + 近期概览均为参考输入）与输出契约（6 槽位严格 JSON）。
  */
-export const PROFILER_SYSTEM_PROMPT = `ProfileDocument = 用户画像文档，恰好 6 个槽位（key 固定，均为字符串数组）：
-interface ProfileDocument {
-  identity: string[];    // 稳定身份事实（职业、角色、生活状态）
-  recent: string[];      // 近期反复提及、正在关心的话题（时效性强）
-  interests: string[];   // 稳定的兴趣领域
-  values: string[];      // 价值观——看重/抵触/做事偏好
-  goals: string[];       // 长期目标与方向
-  misc: string[];        // 不属于以上槽位但值得记住的事实
-}
+export const PROFILER_SYSTEM_PROMPT = `
+你需要通过用户平时的摘录历史总结用户画像，你将接受用户旧画像数据，部分近期被总结过的历史摘要，以及新增的用户摘录。相关数据结构如下：
 
 输入为一个 JSON 对象：
 interface Input {
-  previous: ProfileDocument;  // 上一版画像；无旧画像时为 {}
-  latest: ListItem[];         // 本批新摘要：最新最具体，高优先级
-  recent: ListItem[];         // 历史概览：按时间倒序、至多 100 条；与 latest 重叠的记录以 latest 为准
+  previous: ProfileDocument;    // 上一版画像；无旧画像时为 {}
+  latest: SummaryItem[];        // 新摘要
+  recent: SummaryItem[];        // 历史概览
 }
-interface ListItem {
+
+用户画像结构（6 槽位；每槽位为一段连贯的描述性文字，不是数组；? 表示该键可省略）：
+interface ProfileDocument {
+  identity?: string | null;    // 稳定身份事实（职业、角色、生活状态）
+  recent?: string | null;      // 近期反复提及、正在关心的话题（时效性强）
+  interests?: string | null;   // 稳定的兴趣领域
+  values?: string | null;      // 价值观——看重/抵触/做事偏好
+  goals?: string | null;       // 长期目标与方向
+  misc?: string | null;        // 不属于以上槽位但值得记住的事实
+}
+// 缺键、null 或空串均表示该槽位无内容。
+
+// 单条摘要结构
+interface SummaryItem {
   createdAt: string;      // 记录时间
   grade: string | null;   // 重要性分级，null 表示无分级
   tags: string[];         // 标签，可为空数组
   summary: string;        // 该条 AI 摘要全文
 }
 
-任务：全量重写为一份新的 ProfileDocument（用户是谁、最近在关心什么）。输入均为参考而非照抄：新旧冲突以 latest 为准，被覆盖的旧表述应改写或淘汰，重叠条目合并为一条最准表述；分级高的记录证据权重更高；输入的 recent 为历史时间线参考，但 latest 更新、更具体，优先级更高。
+任务：全量重写为一份新的 ProfileDocument，严格按照规定格式输出。
 
-原则：宁缺毋滥，空槽位是正常结果。每槽位须充分证据才填；稳定槽位（identity/interests/values/goals）需直接明确证据、最好多条摘要互证，勿从单条过度推断；recent 槽位只收明确在关心的近期话题；latest 仅 1–2 条时大部分槽位为空属预期。
+原则：宁缺毋滥，用户画像部分槽位为空是正常结果。每槽位须充分证据才填，写一段连贯文字即可，不要罗列要点。要根据原画像，记录重要性，标签，记录内容，记录时效性，以及同类内容的出现频率等综合因素分析用户画像。
 
-输出：只输出一个 ProfileDocument 的严格 JSON（恰好这 6 键，不允许发明新槽位或改键名；无内容给 [] 或省略键），不要输出任何其他文字。`;
+输出：只输出一个 ProfileDocument 的严格 JSON`;
 
 /**
  * structured output 校验 schema。
- * 入口放宽、出口归一：某槽位缺键或为 null 一律归一化为空数组（视同无内容，
- * 不视为失败）；.strict() 保留——发明新槽位仍判解析失败。
- * 元素为字符串；条目一句话以内由 prompt 约束，不做长度硬校验。
- * 注解 z.ZodType<ProfileDocument, unknown>：编译期把 schema 输出契约
- * 锁到 shared 画像契约（输入侧放宽为 unknown，输出侧为规范 6 键 ProfileDocument）。
+ * 入口放宽、出口透传：槽位接受 string / null / 缺键（undefined），原样透传
+ * （视同无内容，不视为失败）；.strict() 保留——发明新槽位仍判解析失败。
+ * 注解 z.ZodType<ProfileDocument>：编译期把 schema 输出契约锁到 shared 宽松
+ * 画像契约（string | null，键可选；输入侧为 unknown）。
  */
-const slotSchema = z.preprocess(
-  (v) => (v === undefined || v === null ? [] : v),
-  z.array(z.string()),
-);
+const slotSchema = z.string().nullish();
 
-export const profileOutputSchema: z.ZodType<ProfileDocument, unknown> = z
+export const profileOutputSchema: z.ZodType<ProfileDocument> = z
   .object({
-    identity: slotSchema.optional(),
-    recent: slotSchema.optional(),
-    interests: slotSchema.optional(),
-    values: slotSchema.optional(),
-    goals: slotSchema.optional(),
-    misc: slotSchema.optional(),
+    identity: slotSchema,
+    recent: slotSchema,
+    interests: slotSchema,
+    values: slotSchema,
+    goals: slotSchema,
+    misc: slotSchema,
   })
-  .strict()
-  .transform((o) => ({
-    identity: o.identity ?? [],
-    recent: o.recent ?? [],
-    interests: o.interests ?? [],
-    values: o.values ?? [],
-    goals: o.goals ?? [],
-    misc: o.misc ?? [],
-  }));
+  .strict();
 
 /**
  * 画像汇总 Agent（复用 summarizer 的 custom endpoint 模式：{ id, url, apiKey }，
@@ -109,8 +103,8 @@ const profilerAgent = new Agent({
  * previous 为旧画像对象（无旧画像时为 {}，不再注入「尚无画像」字样）；
  * latest 为待汇总摘要（FIFO）；recent 为近期概览（dao 已倒序）；两者序列化时
  * 均剔除 recordId / analyzed（仅 dao 层使用，不喂模型），其余字段原样保留。
- * structuredOutput 经 zod schema 校验：缺槽/null 归一化为空数组，发明新槽位
- * 与超时一样自然抛错（不 catch，由调用方 summarizeNow 走失败路径：旧画像保留、队列不动）。
+ * structuredOutput 经 zod schema 校验：槽位缺键/null 原样透传（视同无内容），
+ * 发明新槽位与超时一样自然抛错（不 catch，由调用方 summarizeNow 走失败路径：旧画像保留、队列不动）。
  *
  * @param input previous 为当前画像（无则 null）；latest 为待汇总摘要（FIFO）；
  *   recent 为近期记录概览（dao 已按时间倒序）
