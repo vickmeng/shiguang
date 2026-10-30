@@ -1,7 +1,7 @@
 /**
  * 画像相关 IPC handler 注册（AC-2、AC-7）。
  *
- * 两通道与底层一一对应、零编排：
+ * 三通道与底层一一对应、零编排：
  *  - profile:get       → ProfileStatusPayload：document/updatedAt 取自
  *                        profileDao.getProfile（无画像行时为 null），
  *                        pendingCount 取自 profileDao.pendingCount，
@@ -10,13 +10,15 @@
  *  - profile:summarize → summarizeNow()（resolve 值原样透出；running 中
  *                        幂等返回 { ok: true }，失败返回 { ok: false, error }，
  *                        单飞语义由 profileRunner 保证）
+ *  - profile:history   → ProfileHistoryEntry[]：profileDao.listProfileHistory
+ *                        原样透出（id 倒序，最新在前）
  *
  * DAO 与 runner 抛错即自然 reject invoke，渲染侧 catch 提示。
  */
 import { ipcMain } from 'electron';
 import { IPC } from '@shiguang/shared';
 import type { ProfileStatusPayload } from '@shiguang/shared';
-import { getProfile, pendingCount } from '@shiguang/ai';
+import { getProfile, listProfileHistory, pendingCount } from '@shiguang/ai';
 import { isRunning, summarizeNow } from '../profile/profileRunner';
 
 /** 注册画像相关 IPC 通道：状态查询 + 手动汇总。 */
@@ -31,4 +33,5 @@ export function registerProfileHandlers(): void {
     } satisfies ProfileStatusPayload;
   });
   ipcMain.handle(IPC.profileSummarize, () => summarizeNow());
+  ipcMain.handle(IPC.profileHistory, () => listProfileHistory());
 }

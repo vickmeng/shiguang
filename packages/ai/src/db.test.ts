@@ -11,6 +11,7 @@ import { migration as tagsMigration } from './migrations/0004_tags';
 import { migration as analysesMigration } from './migrations/0005_analyses';
 import { migration as analysesGradeMigration } from './migrations/0006_analyses_grade';
 import { migration as profileMigration } from './migrations/0007_profile';
+import { migration as profileHistoryMigration } from './migrations/0008_profile_history';
 
 describe('initDatabase', () => {
   let tmpDir: string;
@@ -89,6 +90,7 @@ describe('initDatabase', () => {
       '0005_analyses',
       '0006_analyses_grade',
       '0007_profile',
+      '0008_profile_history',
     ]);
 
     db2.close();
@@ -673,6 +675,105 @@ describe('迁移 0007_profile', () => {
       .prepare(`SELECT summary, model FROM analyses WHERE record_id = ?`)
       .get(recordId) as { summary: string; model: string };
     expect(row).toEqual({ summary: '一句话摘要', model: 'kimi-k2.6' });
+
+    db.close();
+  });
+});
+
+describe('迁移 0008_profile_history', () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'shiguang-migration-0008-test-'));
+    dbPath = join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('迁移后 profile_history 表存在（id 自增主键、document/created_at NOT NULL）', () => {
+    const db = initDatabase(dbPath);
+
+    const cols = db
+      .prepare('PRAGMA table_info(profile_history)')
+      .all() as unknown as Array<{ name: string; notnull: number; pk: number }>;
+    expect(cols.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['id', 'document', 'created_at']),
+    );
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1);
+    expect(cols.find((c) => c.name === 'document')?.notnull).toBe(1);
+    expect(cols.find((c) => c.name === 'created_at')?.notnull).toBe(1);
+
+    db.close();
+  });
+
+  it('旧库（0007 态已有 profiles 行）升级后现有画像被清空（产品决策：不补录历史 v1），profile_history 为空表', () => {
+    // 手工构造仅应用 0001~0007 的"旧库"并写入 profiles 单例行
+    const oldDb = new Database(dbPath);
+    oldDb.pragma('foreign_keys = ON');
+    void migration.up({ context: oldDb });
+    void attachmentMigration.up({ context: oldDb });
+    void dropTypeMigration.up({ context: oldDb });
+    void tagsMigration.up({ context: oldDb });
+    void analysesMigration.up({ context: oldDb });
+    void analysesGradeMigration.up({ context: oldDb });
+    void profileMigration.up({ context: oldDb });
+    oldDb
+      .prepare(`INSERT INTO profiles (id, document, updated_at) VALUES (1, ?, ?)`)
+      .run('{"identity":"旧画像"}', '2026-10-27T00:00:00.000Z');
+    oldDb.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+    for (const name of [
+      migration.name,
+      attachmentMigration.name,
+      dropTypeMigration.name,
+      tagsMigration.name,
+      analysesMigration.name,
+      analysesGradeMigration.name,
+      profileMigration.name,
+    ]) {
+      oldDb.prepare(`INSERT INTO _migrations (name) VALUES (?)`).run(name);
+    }
+    oldDb.close();
+
+    // 再次 initDatabase：应跳过 0001~0007、仅应用 0008
+    const db = initDatabase(dbPath);
+
+    const profileCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM profiles`).get() as { n: number }
+    ).n;
+    expect(profileCount).toBe(0);
+    const historyCount = (
+      db.prepare(`SELECT COUNT(*) AS n FROM profile_history`).get() as { n: number }
+    ).n;
+    expect(historyCount).toBe(0);
+
+    db.close();
+  });
+
+  it('migration.down() 后 profile_history 表消失，其余表不受影响', async () => {
+    const db = initDatabase(dbPath);
+    db.prepare(`INSERT INTO profile_history (document, created_at) VALUES (?, ?)`).run(
+      '{"identity":"快照"}',
+      '2026-10-28T00:00:00.000Z',
+    );
+
+    await profileHistoryMigration.down({ context: db });
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'profile_history'")
+      .all();
+    expect(tables).toEqual([]);
+
+    // profiles / analyses 等其余表不受 down 影响
+    const remaining = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('profiles', 'analyses', 'records')",
+      )
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(remaining).toEqual(expect.arrayContaining(['profiles', 'analyses', 'records']));
 
     db.close();
   });

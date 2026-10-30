@@ -66,7 +66,7 @@ describe('PROFILER_SYSTEM_PROMPT（design 3.2 要点）', () => {
 
     expect(PROFILER_SYSTEM_PROMPT).toContain('previous');
     expect(PROFILER_SYSTEM_PROMPT).toContain('新摘要');
-    expect(PROFILER_SYSTEM_PROMPT).toContain('历史概览');
+    expect(PROFILER_SYSTEM_PROMPT).toContain('历史摘要');
     expect(PROFILER_SYSTEM_PROMPT).toContain('summary');
     // 旧表述全部移除：analyzed 标志、仅元数据、活跃度判断、batch 旧名
     expect(PROFILER_SYSTEM_PROMPT).not.toContain('analyzed');

@@ -7,6 +7,7 @@ import type { ProfileDocument } from '@shiguang/shared';
 import { initDatabase } from '../db';
 import {
   getProfile,
+  listProfileHistory,
   pendingCount,
   pendingSummaries,
   recentMentions,
@@ -124,6 +125,53 @@ describe('profileDao', () => {
     ).n;
     expect(count).toBe(1);
     expect(getProfile()!.document).toEqual(second);
+  });
+
+  it('每次 save 追加一行 profile_history 快照，listProfileHistory 按 id 倒序且 created_at 与当前画像同刻', () => {
+    const first: ProfileDocument = {
+      identity: '第一版',
+      recent: null,
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
+    };
+    const second: ProfileDocument = {
+      identity: '第二版',
+      recent: '新话题',
+      interests: null,
+      values: null,
+      goals: null,
+      misc: null,
+    };
+
+    saveProfileWithStamp({ document: first, stampedIds: [] });
+    const firstUpdatedAt = getProfile()!.updatedAt;
+    saveProfileWithStamp({ document: second, stampedIds: [] });
+    const secondUpdatedAt = getProfile()!.updatedAt;
+
+    const history = listProfileHistory();
+    expect(history).toHaveLength(2);
+    // 倒序：最新在前
+    expect(history[0]).toEqual({ id: 2, createdAt: secondUpdatedAt, document: second });
+    expect(history[1]).toEqual({ id: 1, createdAt: firstUpdatedAt, document: first });
+  });
+
+  it('listProfileHistory 在空表返回 []', () => {
+    expect(listProfileHistory()).toEqual([]);
+  });
+
+  it('listProfileHistory 遇坏 JSON 行降级为空对象 {}，条目保留不抛', () => {
+    db.prepare(`INSERT INTO profile_history (document, created_at) VALUES (?, ?)`).run(
+      '{broken json',
+      '2026-10-28T00:00:00.000Z',
+    );
+
+    const history = listProfileHistory();
+
+    expect(history).toHaveLength(1);
+    expect(history[0].document).toEqual({});
+    expect(history[0].createdAt).toBe('2026-10-28T00:00:00.000Z');
   });
 
   it('stampedIds 命中的 analyses 行 profiled_at 置为画像同一时刻，未命中行保持 NULL', () => {
@@ -380,6 +428,7 @@ describe('profileDao 未初始化', () => {
     expect(() => fresh.pendingSummaries()).toThrow(/profileDao: database not initialized/);
     expect(() => fresh.recentMentions()).toThrow(/profileDao: database not initialized/);
     expect(() => fresh.pendingCount()).toThrow(/profileDao: database not initialized/);
+    expect(() => fresh.listProfileHistory()).toThrow(/profileDao: database not initialized/);
     expect(() =>
       fresh.saveProfileWithStamp({
         document: { identity: null, recent: null, interests: null, values: null, goals: null, misc: null },

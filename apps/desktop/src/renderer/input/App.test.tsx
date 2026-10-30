@@ -28,6 +28,7 @@ function createApiMock(): ShiguangApi {
     profile: {
       get: vi.fn(),
       summarize: vi.fn(),
+      history: vi.fn(),
     },
     input: {
       blur: vi.fn(),

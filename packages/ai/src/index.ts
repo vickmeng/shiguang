@@ -32,6 +32,7 @@ export {
   pendingSummaries,
   pendingCount,
   recentMentions,
+  listProfileHistory,
 } from './dao/profileDao';
 export type { PendingSummary, RecentMention } from './dao/profileDao';
 export { runProfileSummarization } from './profile/profiler';

@@ -1,14 +1,15 @@
 /**
- * profileHandlers 单测：验证画像系统两条 IPC 通道的胶水转发契约
+ * profileHandlers 单测：验证画像系统三条 IPC 通道的胶水转发契约
  * （AC-2、AC-7）。
  *
- * 两通道与底层一一对应、零编排：
+ * 三通道与底层一一对应、零编排：
  *  - profile:get       → { document, updatedAt, pendingCount, running }
  *                        （document/updatedAt 取自 profileDao.getProfile，
  *                        无画像行时为 null；pendingCount 取 profileDao.pendingCount；
  *                        running 取 profileRunner.isRunning）
  *  - profile:summarize → summarizeNow()（resolve 值原样透出，幂等 no-op
  *                        语义由 profileRunner 单飞保证）
+ *  - profile:history   → profileDao.listProfileHistory()（返回值原样透出）
  *
  * mock electron 的 ipcMain（handle 捕获注册）、@shiguang/ai 的
  * profileDao 两函数与 ../profile/profileRunner 的两函数（DAO 与 runner
@@ -30,6 +31,7 @@ const { stubs, dao, runner } = vi.hoisted(() => ({
   dao: {
     getProfile: vi.fn(),
     pendingCount: vi.fn(),
+    listProfileHistory: vi.fn(),
   },
   runner: {
     isRunning: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('electron', () => ({ ipcMain: stubs.ipcMain }));
 vi.mock('@shiguang/ai', () => ({
   getProfile: dao.getProfile,
   pendingCount: dao.pendingCount,
+  listProfileHistory: dao.listProfileHistory,
 }));
 vi.mock('../profile/profileRunner', () => ({
   isRunning: runner.isRunning,
@@ -71,11 +74,11 @@ describe('profileHandlers', () => {
     vi.clearAllMocks();
   });
 
-  it('两通道全部注册（profile:get / profile:summarize）', () => {
+  it('三通道全部注册（profile:get / profile:summarize / profile:history）', () => {
     registerProfileHandlers();
     const channels = stubs.ipcMain.handle.mock.calls.map((c) => c[0]);
     expect(channels).toEqual(
-      expect.arrayContaining([IPC.profileGet, IPC.profileSummarize]),
+      expect.arrayContaining([IPC.profileGet, IPC.profileSummarize, IPC.profileHistory]),
     );
   });
 
@@ -126,5 +129,18 @@ describe('profileHandlers', () => {
     const handler = handlerOf<[unknown], Promise<ProfileSummarizeResult>>(IPC.profileSummarize);
 
     await expect(handler({})).resolves.toEqual({ ok: false, error: 'KIMI_API_KEY 未配置' });
+  });
+
+  it('profile:history → listProfileHistory() 返回值原样透出', async () => {
+    const history = [
+      { id: 2, createdAt: '2026-10-28T08:00:00.000Z', document: DOCUMENT },
+      { id: 1, createdAt: '2026-10-27T08:00:00.000Z', document: { identity: '旧版' } },
+    ];
+    dao.listProfileHistory.mockReturnValue(history);
+    const handler = handlerOf<[unknown], unknown>(IPC.profileHistory);
+
+    // listProfileHistory 为同步 DAO，handler 同步透出数组（invoke 序列化为 Promise 由 electron 保证）
+    expect(handler({})).toBe(history);
+    expect(dao.listProfileHistory).toHaveBeenCalledTimes(1);
   });
 });

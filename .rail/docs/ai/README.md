@@ -25,6 +25,8 @@
 - **后台任务竞争态收敛为通用 `SingleFlightRunner` 原语（`apps/desktop/src/main/lib/singleFlight.ts`），调用方永远不经手 running 标志**：「检查→置位」原子性依赖置位先于首个 await 的 JS 单线程不变量，拷贝散落实现易写错；业务层（profileRunner）只留触发判定，future 后台任务复用同一原语（计时语义 `lastAttemptAt` 随原语白送）。
 - **汇总编排放主进程 profileRunner（capture 钩子与 10min 定时器两类入口在此交汇），不放 renderer、不放 DAO**：renderer 无法感知后台任务生命周期，DAO 保持纯数据访问。触发规则 = 待汇总 ≥5 / 距上次尝试 ≥24h 且有积压 / 首跑（独立常量 `RETRY_INTERVAL_MS`/`TIMER_INTERVAL_MS`，`apps/desktop/src/main/profile/profileRunner.ts`）；「距上次」基准 = `lastAttemptAt ?? profiles.updated_at` 且失败同样推进——否则持续失败下定时器每 10 分钟重试一次 LLM。
 - **画像汇总为派生层，失败路径与迭代一「先分析后入库」同步铁律相反：capture 成功后 fire-and-forget 触发判定，绝不阻塞入库**（`apps/desktop/src/main/ipc/captureHandlers.ts` 钩子挂在 return 之后、try/catch 之外，`.catch(console.error)` 收尾）：失败语义 = 队列不动、旧画像保留、画像页失败态可手动重试；AI 输出 schema 校验失败走同一失败路径，绝不落坏数据。
+- **画像历史追加式存档（迁移 0008 `profile_history` 表），profiles 仍为「当前画像」单例**：每次 `saveProfileWithStamp` 在同一事务追加一行快照（`document` + `created_at`，与 profiles 行同刻），id AUTOINCREMENT 单调递增即版本序，留作日后人格变化分析的数据基础；历史表刻意不记批次信息（喂入了哪些摘要），分析粒度以画像内容为准。产品决策：不补录既有画像为历史 v1，迁移 up 直接 `DELETE FROM profiles`，历史从迁移后第一次成功汇总开始。down 仅 `DROP TABLE profile_history`、不回填被清空的 profiles 行——被删数据为 AI 生成、可重新汇总恢复，不做无谓备份。
+- **画像历史展示走第三条零编排 IPC 通道 `profile:history`（→ `profileDao.listProfileHistory`，id 倒序）**：画像页底部「历史画像」表格（版本 #id / 汇总时间 / 首非空槽位截断预览），行内原生 `<details>` 展开完整槽位——展开收起零组件状态，日后做人格变化分析时再以历史表为数据源扩展。汇总返回后 history 与 status 在同一 finally 中一并重拉（`ProfilePage.tsx` 的 `handleSummarize`，成败都刷新、幂等无害），不另建推送/订阅通道。
 
 ## 技术债务
 
@@ -37,3 +39,4 @@
 - [ ] 近期概览「条目是否仍在出现」只能靠标签比对：概览仅元数据，模型判断旧画像条目活跃度时只能比对标签文本；标签为空或语义漂移时无判据，只能保守保留，陈旧条目可能因此滞留——根治需概览携带轻量主题签名，单独立项
 - [ ] 近期概览窗口参数 30 天 / 90 天（high）/ 上限 100 条为拍脑袋初值：覆盖面与 token 成本的平衡点未经观察验证，画像页实际效果稳定后须回看调优（profileDao.ts:18-22 三个常量集中一处便于调整）
 - [ ] `apps/desktop/src/main/profile/profileRunner.ts:100` 的 `const document = await runProfileSummarization(...)` 存在 pre-existing 缩进异常（多 4 空格）；不影响行为，下次触碰该文件时顺手修正
+- [ ] `profile_history` 增长无上限、无清理策略：每次成功汇总追加一行（画像文档很小，短期无压力）；人格变化分析立项时须一并定义保留窗口/归档策略，届时再评估是否加 LIMIT 查询或清理任务

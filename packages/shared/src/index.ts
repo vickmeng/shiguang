@@ -81,6 +81,8 @@ export const IPC = {
   profileGet: 'profile:get',
   /** invoke：立即触发画像汇总 */
   profileSummarize: 'profile:summarize',
+  /** invoke：读取画像历史快照列表（id 倒序，供画像页历史表格） */
+  profileHistory: 'profile:history',
 } as const;
 
 /**
@@ -176,4 +178,15 @@ export interface ProfileStatusPayload {
 export interface ProfileSummarizeResult {
   ok: boolean;
   error?: string;
+}
+
+/**
+ * 画像历史快照条目（profile:history 响应元素）。
+ * profile_history 表每次汇总成功追加一行；document 为该次汇总产出的
+ * ProfileDocument 全文，created_at 与当前画像 updated_at 同刻。
+ */
+export interface ProfileHistoryEntry {
+  id: number;
+  createdAt: string;
+  document: ProfileDocument;
 }

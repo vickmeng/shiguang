@@ -11,9 +11,17 @@
  * 自动生成画像」+「立即汇总」主按钮）；非 null → 按 SLOT_LABELS 固定顺序
  * 渲染 6 槽位分区（分区标题 + 描述文字段落），槽位为空（null/undefined/空串）
  * 的分区不渲染（design 3.3 骨架第 8 条空槽隐藏）；整页只读，无任何编辑入口。
+ * 历史画像：挂载调 profile:history 拉取快照列表（id 倒序）；汇总成功重新
+ * get 后同步刷新；底部「历史画像」表格——列为 版本（#id）/汇总时间/预览
+ * （SLOT_LABELS 顺序首个非空槽位截断），行内 <details> 展开该版本完整
+ * 非空槽位；无历史时显示空态文案。
  */
 import * as React from 'react';
-import type { ProfileDocument, ProfileStatusPayload } from '@shiguang/shared';
+import type {
+  ProfileDocument,
+  ProfileHistoryEntry,
+  ProfileStatusPayload,
+} from '@shiguang/shared';
 import { toast, Toaster } from '../../components/ui/toast';
 
 /** 槽位中文映射（顺序固定：身份概况/最近关注/兴趣爱好/在意的事/长期方向/其他） */
@@ -26,13 +34,27 @@ const SLOT_LABELS: Array<{ key: keyof ProfileDocument; label: string }> = [
   { key: 'misc', label: '其他' },
 ];
 
+/** 历史条目预览：SLOT_LABELS 顺序首个非空槽位，截断至 40 字 */
+function previewText(document: ProfileDocument): string {
+  for (const { key } of SLOT_LABELS) {
+    const value = document[key];
+    if (value) {
+      return value.length > 40 ? `${value.slice(0, 40)}…` : value;
+    }
+  }
+  return '（空画像）';
+}
+
 export function ProfilePage(): JSX.Element {
   const [status, setStatus] = React.useState<ProfileStatusPayload | null>(null);
+  // history：画像历史快照列表（profile:history，id 倒序）；null = 尚未加载
+  const [history, setHistory] = React.useState<ProfileHistoryEntry[] | null>(null);
   // busy：手动「立即汇总」进行中（await summarize 期间），与 running（主进程后台汇总中）并列禁用按钮
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
     void window.api.profile.get().then(setStatus);
+    void window.api.profile.history().then(setHistory);
   }, []);
 
   /**
@@ -51,6 +73,7 @@ export function ProfilePage(): JSX.Element {
       toast(e instanceof Error ? e.message : '汇总失败', 'destructive');
     } finally {
       setStatus(await window.api.profile.get());
+      setHistory(await window.api.profile.history());
       setBusy(false);
     }
   };
@@ -108,6 +131,54 @@ export function ProfilePage(): JSX.Element {
           );
         })
       )}
+      {/* 历史画像：每次汇总成功自动存档的快照表格（行内 details 展开完整槽位） */}
+      <section className="rounded-md border border-neutral-200 bg-white px-4 py-3">
+        <h2 className="text-sm font-medium text-neutral-600">历史画像</h2>
+        {history === null ? (
+          <p className="mt-2 text-sm text-neutral-400">加载中…</p>
+        ) : history.length === 0 ? (
+          <p className="mt-2 text-sm text-neutral-400">暂无历史画像，每次汇总成功会自动存档</p>
+        ) : (
+          <table className="mt-2 w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-100 text-left text-neutral-400">
+                <th className="py-1.5 pr-3 font-normal">版本</th>
+                <th className="py-1.5 pr-3 font-normal">汇总时间</th>
+                <th className="py-1.5 font-normal">内容</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((entry) => (
+                <tr key={entry.id} className="border-b border-neutral-50 align-top">
+                  <td className="py-2 pr-3 text-neutral-400">#{entry.id}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap text-neutral-600">
+                    {new Date(entry.createdAt).toLocaleString()}
+                  </td>
+                  <td className="py-2 text-neutral-700">
+                    <details>
+                      <summary className="cursor-pointer select-none">
+                        {previewText(entry.document)}
+                      </summary>
+                      <div className="mt-2 flex flex-col gap-2">
+                        {SLOT_LABELS.map(({ key, label }) => {
+                          const value = entry.document[key];
+                          if (!value) return null;
+                          return (
+                            <div key={key}>
+                              <span className="text-neutral-400">{label}：</span>
+                              <span className="whitespace-pre-wrap">{value}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
       {/* 轻提示容器：汇总失败 error 在此弹出，约 2s 自动消失 */}
       <Toaster />
     </div>

@@ -28,33 +28,34 @@ export const PROFILER_SYSTEM_PROMPT = `
 
 输入为一个 JSON 对象：
 interface Input {
-  previous: ProfileDocument;    // 上一版画像；无旧画像时为 {}
+  previous: ProfileDocument;    // 上一版画像；无旧画像时为空
   latest: SummaryItem[];        // 新摘要
-  recent: SummaryItem[];        // 历史概览
+  recent: SummaryItem[];        // 近期历史摘要（已经画像总结过的数据）
 }
 
-用户画像结构（6 槽位；每槽位为一段连贯的描述性文字，不是数组；? 表示该键可省略）：
+用户画像结构：
 interface ProfileDocument {
   identity?: string | null;    // 稳定身份事实（职业、角色、生活状态）
   recent?: string | null;      // 近期反复提及、正在关心的话题（时效性强）
   interests?: string | null;   // 稳定的兴趣领域
-  values?: string | null;      // 价值观——看重/抵触/做事偏好
+  values?: string | null;      // 价值观
   goals?: string | null;       // 长期目标与方向
   misc?: string | null;        // 不属于以上槽位但值得记住的事实
 }
-// 缺键、null 或空串均表示该槽位无内容。
 
 // 单条摘要结构
 interface SummaryItem {
   createdAt: string;      // 记录时间
-  grade: string | null;   // 重要性分级，null 表示无分级
-  tags: string[];         // 标签，可为空数组
-  summary: string;        // 该条 AI 摘要全文
+  grade: string | null;   // 重要性分级，可为空
+  tags: string[];         // 标签，可为空
+  summary: string;        // 该条 AI 摘要
 }
 
 任务：全量重写为一份新的 ProfileDocument，严格按照规定格式输出。
 
-原则：宁缺毋滥，用户画像部分槽位为空是正常结果。每槽位须充分证据才填，写一段连贯文字即可，不要罗列要点。要根据原画像，记录重要性，标签，记录内容，记录时效性，以及同类内容的出现频率等综合因素分析用户画像。
+原则：
+  1.宁缺毋滥，用户画像部分槽位为空是正常结果。每槽位须充分证据才填。
+  2.要根据原画像，记录重要性，标签，记录内容，记录时效性，以及同类内容的出现频率等综合因素分析用户画像。
 
 输出：只输出一个 ProfileDocument 的严格 JSON`;
 

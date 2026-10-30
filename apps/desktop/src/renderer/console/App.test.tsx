@@ -26,6 +26,7 @@ function createApiMock(): ShiguangApi {
         }),
       ),
       summarize: vi.fn(() => Promise.resolve({ ok: true })),
+      history: vi.fn(() => Promise.resolve([])),
     },
   } as unknown as ShiguangApi;
 }

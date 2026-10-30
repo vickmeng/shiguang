@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { ProfileDocument } from '@shiguang/shared';
+import type { ProfileDocument, ProfileHistoryEntry } from '@shiguang/shared';
 
 /**
  * profileDao 持有的数据库连接。
@@ -9,6 +9,8 @@ import type { ProfileDocument } from '@shiguang/shared';
  *
  * profiles 为单例表（id 恒为 1，迁移 0007 CHECK 约束强制）：document 为
  * ProfileDocument JSON 文本，updated_at 为上次汇总成功时刻。
+ * profile_history 为追加式历史快照表（迁移 0008）：每次 saveProfileWithStamp
+ * 成功在同一事务追加一行，id AUTOINCREMENT 单调递增即版本序，留作日后分析。
  * analyses.profiled_at 标记某条摘要曾作为输入参与某次汇总（NULL = 未纳入）。
  *
  * 待汇总队列读取（pendingSummaries / pendingCount）：profiled_at IS NULL，
@@ -121,10 +123,11 @@ export function getProfile(): { document: ProfileDocument; updatedAt: string } |
 }
 
 /**
- * 全量重写画像并对本批输入摘要打汇总时间戳，单事务保证一致。
+ * 全量重写画像、追加历史快照并对本批输入摘要打汇总时间戳，单事务保证一致。
  *
  * profiles 行 UPSERT（id = 1，document 为 JSON.stringify(input.document)，
- * updated_at 为当前 ISO 字符串）；input.stampedIds 非空时批量
+ * updated_at 为当前 ISO 字符串）；profile_history 追加一行快照（document、
+ * created_at 与 profiles 行同刻）；input.stampedIds 非空时批量
  * UPDATE analyses SET profiled_at = now WHERE record_id IN (...)，
  * now 与画像 updated_at 为同一时刻（同一变量）。
  *
@@ -150,6 +153,10 @@ export function saveProfileWithStamp(input: {
       )
       .run(documentJson, now);
 
+    database
+      .prepare(`INSERT INTO profile_history (document, created_at) VALUES (?, ?)`)
+      .run(documentJson, now);
+
     if (input.stampedIds.length > 0) {
       const placeholders = input.stampedIds.map(() => '?').join(', ');
       database
@@ -157,6 +164,40 @@ export function saveProfileWithStamp(input: {
         .run(now, ...input.stampedIds);
     }
   })();
+}
+
+/**
+ * 读取画像历史快照列表（profile_history 全量，id 倒序 = 最新在前）。
+ *
+ * document 逐行 JSON.parse，坏 JSON 降级为空对象 {}（条目仍列出、时间不丢，
+ * 仅内容不可读），不抛错。
+ *
+ * @returns 历史快照列表（最新在前）
+ */
+export function listProfileHistory(): ProfileHistoryEntry[] {
+  if (!db) {
+    throw new Error('profileDao: database not initialized: call setProfileDatabase first');
+  }
+
+  interface HistoryRow {
+    id: number;
+    document: string;
+    created_at: string;
+  }
+
+  const rows = db
+    .prepare(`SELECT id, document, created_at FROM profile_history ORDER BY id DESC`)
+    .all() as unknown as HistoryRow[];
+
+  return rows.map((row) => {
+    let document: ProfileDocument = {};
+    try {
+      document = JSON.parse(row.document) as ProfileDocument;
+    } catch {
+      // 坏 JSON 降级空文档，条目保留
+    }
+    return { id: row.id, createdAt: row.created_at, document };
+  });
 }
 
 /**

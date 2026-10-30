@@ -16,6 +16,7 @@ import {
   type QueryCapturesPayload,
   type QueryCapturesResult,
   type ProfileStatusPayload,
+  type ProfileHistoryEntry,
   type ProfileSummarizeResult,
   type RenameTagPayload,
   type SetLastTagsPayload,
@@ -53,6 +54,8 @@ export interface ShiguangApi {
     get(): Promise<ProfileStatusPayload>;
     /** 立即触发一次画像汇总（单飞：汇总中调用为幂等 no-op） */
     summarize(): Promise<ProfileSummarizeResult>;
+    /** 读取画像历史快照列表（id 倒序，最新在前；空数组 = 尚无历史） */
+    history(): Promise<ProfileHistoryEntry[]>;
   };
   console: {
     /** 打开（或聚焦）后台管理窗口 */
@@ -93,6 +96,7 @@ const api: ShiguangApi = {
   profile: {
     get: () => ipcRenderer.invoke(IPC.profileGet),
     summarize: () => ipcRenderer.invoke(IPC.profileSummarize),
+    history: () => ipcRenderer.invoke(IPC.profileHistory),
   },
   console: {
     open: () => ipcRenderer.send(IPC.consoleOpen),
